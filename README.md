@@ -4,8 +4,9 @@ Client-side tools for exploring home energy consumption and comparing electricit
 
 ## Tariff cost calculator
 
-Open `index.html` (or the deployed GitHub Pages site) and upload an hourly PTU CSV
-(`period_start_local`, `period_end_local`, `energy_kwh`). Configure tariff bands and
+Open `index.html` (or the deployed GitHub Pages site) and upload a PTU CSV
+(`period_start_local`, `period_end_local`, `energy_kwh`, or an Octopus export with
+`Start`, `End`, `Consumption (kwh)`). Configure tariff bands and
 compare annual/monthly costs. All processing happens in the browser; no data leaves
 your machine.
 
