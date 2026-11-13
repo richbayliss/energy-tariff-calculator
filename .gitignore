@@ -1,0 +1,9 @@
+# Local/editor config
+opencode.json
+.DS_Store
+Thumbs.db
+
+# Build/OS artifacts
+*.log
+
+*.csv

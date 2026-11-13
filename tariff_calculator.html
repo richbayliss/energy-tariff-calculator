@@ -1,0 +1,525 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Annual Tariff Cost Calculator</title>
+<style>
+  :root { --bg:#0f172a; --card:#1e293b; --fg:#e2e8f0; --muted:#94a3b8; --accent:#38bdf8; --good:#4ade80; --warn:#fbbf24; }
+  *{box-sizing:border-box}
+  body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:var(--bg);color:var(--fg);padding:20px}
+  h1{font-size:1.6rem;margin:0 0 4px}
+  .sub{color:var(--muted);margin:0 0 20px;font-size:.95rem}
+  .grid{display:grid;gap:16px}
+  @media(min-width:900px){.grid{grid-template-columns:1fr 1fr}}
+  .card{background:var(--card);border-radius:12px;padding:16px;box-shadow:0 4px 12px rgba(0,0,0,.3)}
+  .card h2{font-size:1.1rem;margin:0 0 12px;color:var(--accent)}
+  label{display:block;font-size:.85rem;color:var(--muted);margin-bottom:4px}
+  input,select,textarea{width:100%;padding:8px 10px;border-radius:8px;border:1px solid #334155;background:#0f172a;color:var(--fg);font-size:.9rem}
+  button{padding:8px 14px;border:none;border-radius:8px;background:var(--accent);color:#0f172a;font-weight:600;cursor:pointer;font-size:.9rem}
+  button.secondary{background:#334155;color:var(--fg)}
+  button.danger{background:#ef4444;color:#fff}
+  .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+  .row>*{flex:1 1 120px}
+  .band{border:1px solid #334155;border-radius:10px;padding:12px;margin-bottom:10px;background:#0f172a}
+  .band .row{margin-bottom:8px}
+  .days,.months{display:flex;flex-wrap:wrap;gap:6px}
+  .days label,.months label{display:flex;align-items:center;gap:4px;font-size:.8rem;color:var(--fg);margin:0}
+  .days input,.months input{width:auto}
+  table{width:100%;border-collapse:collapse;font-size:.85rem}
+  th,td{padding:6px 8px;border-bottom:1px solid #334155;text-align:right}
+  th:first-child,td:first-child{text-align:left}
+  th{color:var(--muted);font-weight:500}
+  .total{font-weight:700;color:var(--good)}
+  .stat{display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid #334155}
+  .stat:last-child{border:none}
+  .stat .v{font-weight:600}
+  .muted{color:var(--muted);font-size:.8rem}
+  .pill{display:inline-block;padding:2px 8px;border-radius:999px;background:#334155;font-size:.75rem}
+  .flex{display:flex;gap:8px;flex-wrap:wrap}
+  .mb{margin-bottom:12px}
+  input[type=file]{padding:6px}
+  .hint{font-size:.78rem;color:var(--muted);margin-top:4px}
+</style>
+</head>
+<body>
+<h1>Annual Tariff Cost Calculator</h1>
+<p class="sub">Client-side. Upload an hourly PTU CSV, configure tariff bands, get annual &amp; monthly cost. No data leaves the browser.</p>
+
+<div class="grid">
+  <div class="card">
+    <h2>1. Data</h2>
+    <label>CSV file (hourly PTU)</label>
+    <input type="file" id="file" accept=".csv,text/csv" />
+    <div class="hint">Expected columns: <code>period_start_local</code>, <code>period_end_local</code>, <code>energy_kwh</code> (or Octopus export: <code>Start</code>, <code>End</code>, <code>Consumption (kwh)</code>). Timestamps may include UTC offset.</div>
+    <div id="dataInfo" class="mb" style="margin-top:10px"></div>
+
+    <h2 style="margin-top:16px">2. Tariff configuration</h2>
+    <label>Default rate (£/kWh) if no band matches</label>
+    <input type="number" id="defaultRate" step="0.0001" value="0.25" />
+    <label style="margin-top:8px">Standing charge (£/day)</label>
+    <input type="number" id="standing" step="0.01" value="0.50" />
+
+    <label style="margin-top:10px">Tariffs (built-in + saved)</label>
+    <div id="tariffList" class="mb" style="margin-top:8px"></div>
+    <div class="row" style="margin-top:8px">
+      <input id="saveName" placeholder="Name for current tariff" />
+      <button class="secondary" id="saveAsNew" type="button">Save as new</button>
+      <button class="secondary" id="saveCurrent" type="button">Save (overwrite selected)</button>
+    </div>
+    <div class="row" style="margin-top:8px">
+      <button class="secondary" id="restoreBuiltins" type="button">Restore built-ins</button>
+    </div>
+    <div class="muted" id="currentTariffLabel" style="margin-top:6px"></div>
+    <div class="mb" style="margin-top:12px">
+      <div class="row" style="margin-bottom:8px">
+        <strong>Tariff bands</strong>
+        <button class="secondary" id="addBand" type="button">+ Add band</button>
+      </div>
+      <div id="bands"></div>
+      <div class="hint">Bands are evaluated top-to-bottom; first match wins. Empty days/months/time = "all". Overnight ranges (start &gt; end) wrap past midnight.</div>
+    </div>
+
+    <div class="flex">
+      <button id="calc" type="button">Calculate</button>
+      <button class="secondary" id="export" type="button">Export monthly CSV</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>3. Results</h2>
+    <div id="summary"></div>
+    <h3 style="margin:16px 0 8px;font-size:1rem;color:var(--accent)">Monthly breakdown</h3>
+    <div style="overflow-x:auto">
+      <table id="monthly"><thead><tr><th>Month</th><th>kWh</th><th>Cost £</th><th>Avg £/kWh</th><th>Standing £</th></tr></thead><tbody></tbody></table>
+    </div>
+  </div>
+</div>
+
+<script>
+function parseCSV(text){
+  const lines = text.replace(/\r\n/g,'\n').replace(/\r/g,'\n').split('\n').filter(l=>l.trim()!=='');
+  if(!lines.length) return {header:[],rows:[]};
+  const parseLine = (line)=>{
+    const out=[]; let cur=''; let inQ=false;
+    for(let i=0;i<line.length;i++){
+      const c=line[i];
+      if(inQ){
+        if(c==='"' && line[i+1]==='"'){cur+='"';i++;}
+        else if(c==='"'){inQ=false;}
+        else cur+=c;
+      } else {
+        if(c==='"'){inQ=true;}
+        else if(c===','){out.push(cur);cur='';}
+        else cur+=c;
+      }
+    }
+    out.push(cur);
+    return out;
+  };
+  const header = parseLine(lines[0]).map(h=>h.trim().replace(/^\ufeff/,''));
+  const rows = lines.slice(1).map(l=>parseLine(l));
+  return {header,rows};
+}
+
+let dataRows = [];
+const daysShort = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+const monthNames = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+
+function toMinutes(t){
+  if(!t) return null;
+  const [h,m] = t.split(':').map(x=>parseInt(x,10));
+  if(isNaN(h)) return null;
+  return (h%24)*60 + (isNaN(m)?0:m);
+}
+function inTimeRange(mins,start,end){
+  if(start==null && end==null) return true;
+  if(start==null) start=0;
+  if(end==null) end=1440;
+  if(end===0 && start!==0) end=1440;
+  if(start===end) return true;
+  if(start<end) return mins>=start && mins<end;
+  return mins>=start || mins<end;
+}
+
+let bandId = 0;
+function makeBand(b){
+  b = b||{};
+  const id = ++bandId;
+  const div = document.createElement('div');
+  div.className='band';
+  div.dataset.id=id;
+  div.innerHTML = `
+    <div class="row">
+      <div><label>Name</label><input class="b-name" value="${b.name||'Band '+id}" /></div>
+      <div><label>Rate £/kWh</label><input class="b-rate" type="number" step="0.0001" value="${b.rate!=null?b.rate:0.15}" /></div>
+      <div><label>Start (HH:MM)</label><input class="b-start" type="time" value="${b.start||''}" /></div>
+      <div><label>End (HH:MM)</label><input class="b-end" type="time" value="${b.end||''}" /></div>
+    </div>
+    <div class="row">
+      <div style="flex:2">
+        <label>Days (empty = all)</label>
+        <div class="days">
+          ${daysShort.map((d,i)=>`<label><input type="checkbox" class="b-day" value="${i}" ${ (b.days&&b.days.includes(i))?'checked':'' }/>${d}</label>`).join('')}
+        </div>
+      </div>
+      <div style="flex:2">
+        <label>Months (empty = all)</label>
+        <div class="months">
+          ${monthNames.map((m,i)=>`<label><input type="checkbox" class="b-month" value="${i+1}" ${ (b.months&&b.months.includes(i+1))?'checked':'' }/>${m}</label>`).join('')}
+        </div>
+      </div>
+      <div style="flex:0 0 auto;align-self:flex-end">
+        <button class="danger b-del" type="button">Remove</button>
+      </div>
+    </div>
+  `;
+  div.querySelector('.b-del').addEventListener('click',()=>div.remove());
+  document.getElementById('bands').appendChild(div);
+}
+
+const presets = {
+  'flat': {defaultRate:0.25, standing:0.50, bands:[]},
+  'economy7': {defaultRate:0.33, standing:0.50, bands:[{name:'Night (off-peak)',rate:0.15,start:'00:00',end:'07:00',days:[],months:[]}]},
+  'octopus-go': {defaultRate:0.33, standing:0.50, bands:[{name:'Go off-peak',rate:0.095,start:'00:30',end:'05:30',days:[],months:[]}]},
+  'peak-avoid': {defaultRate:0.25, standing:0.50, bands:[{name:'Off-peak',rate:0.07,start:'00:00',end:'07:00',days:[],months:[]},{name:'Peak',rate:0.40,start:'16:00',end:'19:00',days:[1,2,3,4,5],months:[]}]},
+};
+
+function minToTime(m){
+  if(m==null) return '';
+  const h=Math.floor(m/60)%24;
+  const mm=m%60;
+  return String(h).padStart(2,'0')+':'+String(mm).padStart(2,'0');
+}
+function collectConfig(){
+  return {
+    defaultRate: parseFloat(document.getElementById('defaultRate').value)||0,
+    standing: parseFloat(document.getElementById('standing').value)||0,
+    bands: getBands().map(b=>({name:b.name,rate:b.rate,start:minToTime(b.start),end:minToTime(b.end),days:b.days,months:b.months}))
+  };
+}
+function applyConfig(cfg){
+  if(!cfg) return;
+  document.getElementById('defaultRate').value = cfg.defaultRate!=null?cfg.defaultRate:0.25;
+  document.getElementById('standing').value = cfg.standing!=null?cfg.standing:0.5;
+  document.getElementById('bands').innerHTML='';
+  (cfg.bands||[]).forEach(b=>makeBand(b));
+}
+let currentTariffName = null;
+
+function getSavedList(){
+  return JSON.parse(localStorage.getItem('savedTariffs')||'[]');
+}
+function setSavedList(list){
+  localStorage.setItem('savedTariffs', JSON.stringify(list));
+}
+
+function seedBuiltins(){
+  if(!localStorage.getItem('savedTariffs')){
+    const list = [
+      {name:'Flat 24/7', config: presets.flat},
+      {name:'Economy 7', config: presets['economy7']},
+      {name:'Octopus Go', config: presets['octopus-go']},
+      {name:'Peak/Off-peak', config: presets['peak-avoid']},
+    ];
+    setSavedList(list);
+  }
+}
+
+function calcTotalForConfig(cfg){
+  if(!dataRows.length) return null;
+  if(!cfg) cfg={};
+  const bands = (cfg.bands||[]).map(b=>({name:b.name,rate:b.rate,start:toMinutes(b.start),end:toMinutes(b.end),days:b.days||[],months:b.months||[]}));
+  const defaultRate = cfg.defaultRate!=null?cfg.defaultRate:0;
+  const standing = cfg.standing!=null?cfg.standing:0;
+  let totalCost=0;
+  const daysSet=new Set();
+  for(const r of dataRows){
+    const durMs = r.end.getTime() - r.start.getTime();
+    const durMin = Math.max(1, Math.round(durMs/60000));
+    const perMinEnergy = r.energy / durMin;
+    let cost=0;
+    for(let i=0;i<durMin;i++){
+      const t = new Date(r.start.getTime() + i*60000);
+      const rate = rateFor(t, bands, defaultRate);
+      cost += perMinEnergy * rate;
+    }
+    totalCost += cost;
+    const dk = r.start.getFullYear()+'-'+String(r.start.getMonth()+1).padStart(2,'0')+'-'+String(r.start.getDate()).padStart(2,'0');
+    daysSet.add(dk);
+  }
+  return totalCost + daysSet.size*standing;
+}
+
+function renderTariffList(){
+  const list = getSavedList();
+  const container = document.getElementById('tariffList');
+  container.innerHTML='';
+  if(!list.length){ container.innerHTML='<span class="muted">No tariffs saved.</span>'; return; }
+  const ul = document.createElement('ul');
+  ul.style.listStyle='none'; ul.style.padding='0'; ul.style.margin='0';
+  list.forEach(item=>{
+    const li = document.createElement('li');
+    li.style.display='flex'; li.style.alignItems='center'; li.style.gap='6px';
+    li.style.padding='4px 0'; li.style.borderBottom='1px solid #334155';
+    const name = document.createElement('span');
+    name.style.flex='1';
+    const total = calcTotalForConfig(item.config);
+    name.textContent = item.name + (total!=null? '  — £'+total.toFixed(2) : '');
+    if(item.name===currentTariffName){ name.style.fontWeight='700'; name.style.color='var(--accent)'; }
+    li.appendChild(name);
+
+    const mkBtn = (label,cls,fn)=>{
+      const b=document.createElement('button');
+      b.type='button'; b.textContent=label; b.className=cls||'secondary';
+      b.style.padding='4px 8px'; b.style.fontSize='.75rem';
+      b.addEventListener('click',fn);
+      return b;
+    };
+    li.appendChild(mkBtn('Load','',()=>{ applyConfig(item.config); currentTariffName=item.name; updateCurrentLabel(); renderTariffList(); if(dataRows.length) runCalculation(); }));
+    li.appendChild(mkBtn('Rename','secondary',()=>{
+      const newName = prompt('Rename tariff:', item.name);
+      if(!newName || !newName.trim() || newName.trim()===item.name) return;
+      const trimmed = newName.trim();
+      const list2 = getSavedList();
+      if(list2.some(x=>x.name===trimmed)){ alert('A tariff with that name already exists.'); return; }
+      const it = list2.find(x=>x.name===item.name);
+      if(it){ it.name=trimmed; setSavedList(list2); if(currentTariffName===item.name) currentTariffName=trimmed; renderTariffList(); updateCurrentLabel(); }
+    }));
+    li.appendChild(mkBtn('Duplicate','secondary',()=>{
+      const newName = prompt('Duplicate as:', item.name+' copy');
+      if(!newName || !newName.trim()) return;
+      const trimmed = newName.trim();
+      const list2 = getSavedList();
+      if(list2.some(x=>x.name===trimmed)){ alert('A tariff with that name already exists.'); return; }
+      list2.push({name:trimmed, config:JSON.parse(JSON.stringify(item.config))});
+      setSavedList(list2);
+      renderTariffList();
+    }));
+    li.appendChild(mkBtn('Delete','danger',()=>{
+      if(!confirm('Delete "'+item.name+'"?')) return;
+      let list2 = getSavedList().filter(x=>x.name!==item.name);
+      setSavedList(list2);
+      if(currentTariffName===item.name) currentTariffName=null;
+      renderTariffList(); updateCurrentLabel();
+    }));
+    ul.appendChild(li);
+  });
+  container.appendChild(ul);
+}
+
+function updateCurrentLabel(){
+  const el = document.getElementById('currentTariffLabel');
+  if(currentTariffName) el.textContent = 'Current: '+currentTariffName+' (edits are not auto-saved)';
+  else el.textContent = 'Current: unsaved tariff';
+}
+
+function saveAsNew(){
+  const name = document.getElementById('saveName').value.trim();
+  if(!name){ alert('Enter a name'); return; }
+  const list = getSavedList();
+  if(list.some(x=>x.name===name)){
+    if(!confirm('A tariff named "'+name+'" exists. Overwrite it?')) return;
+  }
+  const cfg = collectConfig();
+  const i = list.findIndex(x=>x.name===name);
+  if(i>=0) list[i].config=cfg; else list.push({name,config:cfg});
+  setSavedList(list);
+  currentTariffName = name;
+  document.getElementById('saveName').value='';
+  renderTariffList(); updateCurrentLabel();
+}
+
+function saveOverwrite(){
+  if(!currentTariffName){ alert('No tariff selected. Use "Save as new".'); return; }
+  if(!confirm('Overwrite "'+currentTariffName+'" with current settings?')) return;
+  const list = getSavedList();
+  const i = list.findIndex(x=>x.name===currentTariffName);
+  if(i<0){ alert('Selected tariff no longer exists.'); currentTariffName=null; renderTariffList(); updateCurrentLabel(); return; }
+  list[i].config = collectConfig();
+  setSavedList(list);
+  renderTariffList();
+}
+
+function restoreBuiltins(){
+  const list = getSavedList();
+  const builtins = [
+    {name:'Flat 24/7', config: presets.flat},
+    {name:'Economy 7', config: presets['economy7']},
+    {name:'Octopus Go', config: presets['octopus-go']},
+    {name:'Peak/Off-peak', config: presets['peak-avoid']},
+  ];
+  for(const b of builtins){
+    if(!list.some(x=>x.name===b.name)) list.push(b);
+  }
+  setSavedList(list);
+  renderTariffList();
+}
+
+seedBuiltins();
+renderTariffList();
+updateCurrentLabel();
+
+document.getElementById('restoreBuiltins').addEventListener('click', restoreBuiltins);
+document.getElementById('saveAsNew').addEventListener('click', saveAsNew);
+document.getElementById('saveCurrent').addEventListener('click', saveOverwrite);
+
+document.getElementById('addBand').addEventListener('click',()=>makeBand());
+
+makeBand({name:'Off-peak',rate:0.07,start:'00:00',end:'07:00',days:[],months:[]});
+makeBand({name:'Peak',rate:0.30,start:'16:00',end:'19:00',days:[1,2,3,4,5],months:[]});
+
+function getBands(){
+  const out=[];
+  document.querySelectorAll('#bands .band').forEach(div=>{
+    const days=[]; div.querySelectorAll('.b-day:checked').forEach(c=>days.push(parseInt(c.value,10)));
+    const months=[]; div.querySelectorAll('.b-month:checked').forEach(c=>months.push(parseInt(c.value,10)));
+    out.push({
+      name: div.querySelector('.b-name').value,
+      rate: parseFloat(div.querySelector('.b-rate').value)||0,
+      start: toMinutes(div.querySelector('.b-start').value),
+      end: toMinutes(div.querySelector('.b-end').value),
+      days, months
+    });
+  });
+  return out;
+}
+
+function rateFor(date, bands, defaultRate){
+  const mins = date.getHours()*60 + date.getMinutes();
+  const day = date.getDay();
+  const month = date.getMonth()+1;
+  for(const b of bands){
+    if(b.months.length && !b.months.includes(month)) continue;
+    if(b.days.length && !b.days.includes(day)) continue;
+    if(!inTimeRange(mins,b.start,b.end)) continue;
+    return b.rate;
+  }
+  return defaultRate;
+}
+
+document.getElementById('file').addEventListener('change', async (e)=>{
+  const f = e.target.files[0];
+  if(!f) return;
+  const text = await f.text();
+  const {header,rows} = parseCSV(text);
+  const norm = h => h.toLowerCase().replace(/[^a-z0-9]/g,'');
+  const findCol = (names) => header.findIndex(h => names.includes(norm(h)));
+  const idxStart = findCol(['periodstartlocal','periodstart','intervalstart','start','starttime','startdatetime','begin','from']);
+  const idxEnd = findCol(['periodendlocal','periodend','intervalend','end','endtime','enddatetime','finish','to']);
+  const idxEnergy = findCol(['energykwh','energy','consumptionkwh','consumption','kwh','usagekwh','usage']);
+  if(idxStart<0 || idxEnergy<0){ alert('CSV must contain a start timestamp and an energy/consumption column'); return; }
+  dataRows = [];
+  for(const r of rows){
+    if(!r || r.length<=Math.max(idxStart,idxEnergy)) continue;
+    const s = r[idxStart].trim();
+    const eKwh = parseFloat(r[idxEnergy]);
+    if(!s || isNaN(eKwh)) continue;
+    const naive = s.replace(/[+-]\d{2}:?\d{2}$/,'').replace(/Z$/,'');
+    const d = new Date(naive);
+    if(isNaN(d.getTime())) continue;
+    let end = null;
+    if(idxEnd>=0 && r[idxEnd]){
+      const ne = r[idxEnd].trim().replace(/[+-]\d{2}:?\d{2}$/,'').replace(/Z$/,'');
+      const de = new Date(ne);
+      if(!isNaN(de.getTime())) end = de;
+    }
+    if(!end) end = new Date(d.getTime() + 60*60*1000);
+    dataRows.push({start:d, end:end, energy:eKwh});
+  }
+  const first = dataRows.length? dataRows[0].start : null;
+  const last = dataRows.length? dataRows[dataRows.length-1].start : null;
+  const totalKwh = dataRows.reduce((a,r)=>a+r.energy,0);
+  document.getElementById('dataInfo').innerHTML =
+    `<span class="pill">${dataRows.length} PTUs</span> ` +
+    (first?`<span class="muted">${first.toLocaleString()} → ${last.toLocaleString()}</span>`:'') +
+    ` <span class="muted">Total ${totalKwh.toFixed(2)} kWh</span>`;
+  renderTariffList();
+});
+
+function runCalculation(){
+  if(!dataRows.length){ alert('Upload a CSV first'); return; }
+  const bands = getBands();
+  const defaultRate = parseFloat(document.getElementById('defaultRate').value)||0;
+  const standing = parseFloat(document.getElementById('standing').value)||0;
+
+  const months = {};
+  const daysSet = new Set();
+  let totalCost = 0, totalKwh = 0;
+  for(const r of dataRows){
+    const durMs = r.end.getTime() - r.start.getTime();
+    const durMin = Math.max(1, Math.round(durMs/60000));
+    const perMinEnergy = r.energy / durMin;
+    let cost = 0;
+    for(let i=0;i<durMin;i++){
+      const t = new Date(r.start.getTime() + i*60000);
+      const rate = rateFor(t, bands, defaultRate);
+      cost += perMinEnergy * rate;
+    }
+    totalCost += cost; totalKwh += r.energy;
+    const key = r.start.getFullYear()+'-'+String(r.start.getMonth()+1).padStart(2,'0');
+    if(!months[key]) months[key]={kwh:0,cost:0,days:new Set()};
+    months[key].kwh += r.energy;
+    months[key].cost += cost;
+    const dk = r.start.getFullYear()+'-'+String(r.start.getMonth()+1).padStart(2,'0')+'-'+String(r.start.getDate()).padStart(2,'0');
+    months[key].days.add(dk);
+    daysSet.add(dk);
+  }
+  let standingTotal = 0;
+  const monthKeys = Object.keys(months).sort();
+  for(const k of monthKeys){
+    const m = months[k];
+    const sc = m.days.size * standing;
+    m.standing = sc;
+    standingTotal += sc;
+  }
+  const grandTotal = totalCost + standingTotal;
+
+  document.getElementById('summary').innerHTML = `
+    <div class="stat"><span>Total energy</span><span class="v">${totalKwh.toFixed(2)} kWh</span></div>
+    <div class="stat"><span>Energy cost</span><span class="v">£${totalCost.toFixed(2)}</span></div>
+    <div class="stat"><span>Standing charge</span><span class="v">£${standingTotal.toFixed(2)} (${daysSet.size} days)</span></div>
+    <div class="stat"><span><strong>Annual total</strong></span><span class="v total">£${grandTotal.toFixed(2)}</span></div>
+    <div class="stat"><span>Avg rate (incl. standing)</span><span class="v">£${(grandTotal/totalKwh).toFixed(4)}/kWh</span></div>
+    <div class="stat"><span>Avg rate (energy only)</span><span class="v">£${(totalCost/totalKwh).toFixed(4)}/kWh</span></div>
+  `;
+
+  const tbody = document.querySelector('#monthly tbody');
+  tbody.innerHTML = '';
+  for(const k of monthKeys){
+    const m = months[k];
+    const avg = m.kwh? m.cost/m.kwh : 0;
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td>${k}</td><td>${m.kwh.toFixed(2)}</td><td>${m.cost.toFixed(2)}</td><td>${avg.toFixed(4)}</td><td>${m.standing.toFixed(2)}</td>`;
+    tbody.appendChild(tr);
+  }
+  const tr = document.createElement('tr');
+  tr.innerHTML = `<td><strong>Total</strong></td><td><strong>${totalKwh.toFixed(2)}</strong></td><td><strong>${totalCost.toFixed(2)}</strong></td><td><strong>${(totalCost/totalKwh).toFixed(4)}</strong></td><td><strong>${standingTotal.toFixed(2)}</strong></td>`;
+  tbody.appendChild(tr);
+
+  window._lastMonths = months;
+  window._lastMonthKeys = monthKeys;
+}
+document.getElementById('calc').addEventListener('click', runCalculation);
+
+document.getElementById('export').addEventListener('click', ()=>{
+  if(!window._lastMonths){ alert('Calculate first'); return; }
+  const rows = [['month','kwh','energy_cost_gbp','avg_rate_gbp_per_kwh','standing_charge_gbp','total_gbp']];
+  let gKwh=0,gCost=0,gSc=0;
+  for(const k of window._lastMonthKeys){
+    const m = window._lastMonths[k];
+    const tot = m.cost + m.standing;
+    gKwh+=m.kwh; gCost+=m.cost; gSc+=m.standing;
+    rows.push([k, m.kwh.toFixed(4), m.cost.toFixed(2), (m.kwh?m.cost/m.kwh:0).toFixed(4), m.standing.toFixed(2), tot.toFixed(2)]);
+  }
+  rows.push(['TOTAL', gKwh.toFixed(4), gCost.toFixed(2), (gKwh?gCost/gKwh:0).toFixed(4), gSc.toFixed(2), (gCost+gSc).toFixed(2)]);
+  const csv = rows.map(r=>r.join(',')).join('\n');
+  const blob = new Blob([csv],{type:'text/csv'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'tariff_monthly_costs.csv';
+  a.click();
+});
+</script>
+</body>
+</html>
