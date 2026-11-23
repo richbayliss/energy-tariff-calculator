@@ -54,6 +54,15 @@
     <div class="hint">Expected columns: <code>period_start_local</code>, <code>period_end_local</code>, <code>energy_kwh</code> (or Octopus export: <code>Start</code>, <code>End</code>, <code>Consumption (kwh)</code>). Timestamps may include UTC offset.</div>
     <div id="dataInfo" class="mb" style="margin-top:10px"></div>
 
+    <h3 style="margin-top:12px;font-size:1rem;color:var(--accent)">ESS (site)</h3>
+    <label>Capacity (kWh)</label>
+    <input type="number" id="essCapacity" step="0.1" value="0" />
+    <label style="margin-top:8px">Charge power (kW)</label>
+    <input type="number" id="essChargePower" step="0.1" value="0" />
+    <label style="margin-top:8px">Discharge power (kW)</label>
+    <input type="number" id="essDischargePower" step="0.1" value="0" />
+    <div class="hint">Site property. Arbitrage: charges off-peak, discharges to meet demand. No grid export. Saved with the browser. Set charge power high enough to fill capacity in your off-peak window (Octopus Go: 5 h).</div>
+
     <h2 style="margin-top:16px">2. Tariff configuration</h2>
     <label>Default rate (£/kWh) if no band matches</label>
     <input type="number" id="defaultRate" step="0.0001" value="0.25" />
@@ -92,6 +101,10 @@
     <h3 style="margin:16px 0 8px;font-size:1rem;color:var(--accent)">Monthly breakdown</h3>
     <div style="overflow-x:auto">
       <table id="monthly"><thead><tr><th>Month</th><th>kWh</th><th>Cost £</th><th>Avg £/kWh</th><th>Standing £</th></tr></thead><tbody></tbody></table>
+    </div>
+    <h3 style="margin:16px 0 8px;font-size:1rem;color:var(--accent)">Band breakdown (grid import)</h3>
+    <div style="overflow-x:auto">
+      <table id="bandsBreakdown"><thead><tr><th>Band</th><th>Rate £/kWh</th><th>With ESS</th><th>Without ESS</th></tr></thead><tbody></tbody></table>
     </div>
   </div>
 </div>
@@ -227,28 +240,8 @@ function seedBuiltins(){
 }
 
 function calcTotalForConfig(cfg){
-  if(!dataRows.length) return null;
-  if(!cfg) cfg={};
-  const bands = (cfg.bands||[]).map(b=>({name:b.name,rate:b.rate,start:toMinutes(b.start),end:toMinutes(b.end),days:b.days||[],months:b.months||[]}));
-  const defaultRate = cfg.defaultRate!=null?cfg.defaultRate:0;
-  const standing = cfg.standing!=null?cfg.standing:0;
-  let totalCost=0;
-  const daysSet=new Set();
-  for(const r of dataRows){
-    const durMs = r.end.getTime() - r.start.getTime();
-    const durMin = Math.max(1, Math.round(durMs/60000));
-    const perMinEnergy = r.energy / durMin;
-    let cost=0;
-    for(let i=0;i<durMin;i++){
-      const t = new Date(r.start.getTime() + i*60000);
-      const rate = rateFor(t, bands, defaultRate);
-      cost += perMinEnergy * rate;
-    }
-    totalCost += cost;
-    const dk = r.start.getFullYear()+'-'+String(r.start.getMonth()+1).padStart(2,'0')+'-'+String(r.start.getDate()).padStart(2,'0');
-    daysSet.add(dk);
-  }
-  return totalCost + daysSet.size*standing;
+  const res = simulate(cfg);
+  return res ? res.totalCost : null;
 }
 
 function renderTariffList(){
@@ -360,6 +353,23 @@ seedBuiltins();
 renderTariffList();
 updateCurrentLabel();
 
+// Load persisted ESS settings
+(function loadEss(){
+  try {
+    const saved = JSON.parse(localStorage.getItem('essSettings')||'null');
+    if(saved){
+      document.getElementById('essCapacity').value = saved.capacity!=null?saved.capacity:0;
+      document.getElementById('essChargePower').value = saved.chargePower!=null?saved.chargePower:0;
+      document.getElementById('essDischargePower').value = saved.dischargePower!=null?saved.dischargePower:0;
+    }
+  } catch(e){}
+})();
+['essCapacity','essChargePower','essDischargePower'].forEach(id=>{
+  const el = document.getElementById(id);
+  if(el) el.addEventListener('change', persistEss);
+  if(el) el.addEventListener('input', persistEss);
+});
+
 document.getElementById('restoreBuiltins').addEventListener('click', restoreBuiltins);
 document.getElementById('saveAsNew').addEventListener('click', saveAsNew);
 document.getElementById('saveCurrent').addEventListener('click', saveOverwrite);
@@ -396,6 +406,199 @@ function rateFor(date, bands, defaultRate){
     return b.rate;
   }
   return defaultRate;
+}
+
+function getEssConfig(){
+  const readInput = (id)=>{
+    const el = document.getElementById(id);
+    if(el && el.value!=='') return parseFloat(el.value)||0;
+    return null;
+  };
+  let cap = readInput('essCapacity');
+  let ch = readInput('essChargePower');
+  let dis = readInput('essDischargePower');
+  if(cap==null || ch==null || dis==null){
+    try {
+      const saved = JSON.parse(localStorage.getItem('essSettings')||'null');
+      if(saved){ cap = saved.capacity||0; ch = saved.chargePower||0; dis = saved.dischargePower||0; }
+      else { cap=0; ch=0; dis=0; }
+    } catch(e){ cap=0; ch=0; dis=0; }
+  }
+  return {capacity:cap||0, chargePower:ch||0, dischargePower:dis||0};
+}
+
+function persistEss(){
+  const cfg = {
+    capacity: parseFloat(document.getElementById('essCapacity').value)||0,
+    chargePower: parseFloat(document.getElementById('essChargePower').value)||0,
+    dischargePower: parseFloat(document.getElementById('essDischargePower').value)||0
+  };
+  localStorage.setItem('essSettings', JSON.stringify(cfg));
+}
+
+function simulate(cfg){
+  if(!dataRows.length) return null;
+  if(!cfg) cfg={};
+  const bands = (cfg.bands||[]).map(b=>({name:b.name,rate:b.rate,start:toMinutes(b.start),end:toMinutes(b.end),days:b.days||[],months:b.months||[]}));
+  const defaultRate = cfg.defaultRate!=null?cfg.defaultRate:0;
+  const standing = cfg.standing!=null?cfg.standing:0;
+  const ess = getEssConfig();
+  const capacity = ess.capacity||0;
+  const chargePower = ess.chargePower||0;
+  const dischargePower = ess.dischargePower||0;
+
+  // Build minute slots
+  const slots = [];
+  const monthDays = {};
+  const allDays = new Set();
+  for(const r of dataRows){
+    const durMs = r.end.getTime() - r.start.getTime();
+    const durMin = Math.max(1, Math.round(durMs/60000));
+    const perMinEnergy = r.energy / durMin;
+    for(let i=0;i<durMin;i++){
+      const t = new Date(r.start.getTime() + i*60000);
+      const mins = t.getHours()*60 + t.getMinutes();
+      const day = t.getDay();
+      const month = t.getMonth()+1;
+      let matchedBand = null;
+      for(const b of bands){
+        if(b.months.length && !b.months.includes(month)) continue;
+        if(b.days.length && !b.days.includes(day)) continue;
+        if(!inTimeRange(mins,b.start,b.end)) continue;
+        matchedBand = b; break;
+      }
+      const rate = matchedBand ? matchedBand.rate : defaultRate;
+      const bandName = matchedBand ? matchedBand.name : 'Default';
+      const mk = t.getFullYear()+'-'+String(t.getMonth()+1).padStart(2,'0');
+      const dk = t.getFullYear()+'-'+String(t.getMonth()+1).padStart(2,'0')+'-'+String(t.getDate()).padStart(2,'0');
+      slots.push({rate:rate, load:perMinEnergy, monthKey:mk, dayKey:dk, bandName:bandName});
+    }
+    const dk = r.start.getFullYear()+'-'+String(r.start.getMonth()+1).padStart(2,'0')+'-'+String(r.start.getDate()).padStart(2,'0');
+    allDays.add(dk);
+    const mk2 = r.start.getFullYear()+'-'+String(r.start.getMonth()+1).padStart(2,'0');
+    if(!monthDays[mk2]) monthDays[mk2]=new Set();
+    monthDays[mk2].add(dk);
+  }
+
+  const n = slots.length;
+  const gridImport = new Array(n);
+  // baseline
+  const baselineGrid = new Array(n);
+  for(let i=0;i<n;i++){ baselineGrid[i]=slots[i].load; gridImport[i]=slots[i].load; }
+
+  const cap = capacity>0?capacity:0;
+  const cRate = chargePower>0?chargePower/60:0;
+  const dRate = dischargePower>0?dischargePower/60:0;
+
+  if(cap>0 && (cRate>0 || dRate>0)){
+    const chargeAmt = new Array(n).fill(0);
+    const dischargeAmt = new Array(n).fill(0);
+
+    // Group slot indices by day
+    const byDay = {};
+    for(let i=0;i<n;i++){
+      const dk = slots[i].dayKey;
+      if(!byDay[dk]) byDay[dk]=[];
+      byDay[dk].push(i);
+    }
+
+    for(const dk of Object.keys(byDay)){
+      const idxs = byDay[dk];
+      // charge capacity per slot (kWh)
+      const cRem = idxs.map(()=>cRate);
+      // discharge capacity per slot (kWh)
+      const dRem = idxs.map(i=>Math.min(dRate, slots[i].load));
+      // map from local to global index
+      // sorted charge slots by rate asc
+      const chargeSlots = idxs.map((gi,li)=>({li:li, gi:gi, rate:slots[gi].rate})).sort((a,b)=>a.rate-b.rate);
+      // sorted discharge slots by rate desc
+      const dischargeSlots = idxs.map((gi,li)=>({li:li, gi:gi, rate:slots[gi].rate})).sort((a,b)=>b.rate-a.rate);
+
+      let remCap = cap;
+      let ci = 0, di = 0;
+      // advance helpers
+      while(ci < chargeSlots.length && di < dischargeSlots.length && remCap > 1e-9){
+        const cs = chargeSlots[ci];
+        const ds = dischargeSlots[di];
+        if(cs.rate >= ds.rate - 1e-12) break; // no profit
+        if(cs.gi === ds.gi){ ci++; continue; } // same slot
+        const amt = Math.min(cRem[cs.li], dRem[ds.li], remCap);
+        if(amt <= 1e-9){ 
+          if(cRem[cs.li] <= 1e-9) ci++;
+          if(dRem[ds.li] <= 1e-9) di++;
+          continue;
+        }
+        chargeAmt[cs.gi] += amt;
+        dischargeAmt[ds.gi] += amt;
+        cRem[cs.li] -= amt;
+        dRem[ds.li] -= amt;
+        remCap -= amt;
+        if(cRem[cs.li] <= 1e-9) ci++;
+        if(dRem[ds.li] <= 1e-9) di++;
+      }
+    }
+
+    for(let i=0;i<n;i++){
+      gridImport[i] = slots[i].load + chargeAmt[i] - dischargeAmt[i];
+      if(gridImport[i] < 0) gridImport[i] = 0;
+    }
+  }
+
+  const bandMap = {};
+  for(let i=0;i<n;i++){
+    const key = slots[i].bandName+'|'+slots[i].rate;
+    if(!bandMap[key]) bandMap[key] = {name:slots[i].bandName, rate:slots[i].rate, gridKwh:0, cost:0, baselineGridKwh:0, baselineCost:0};
+    const b = bandMap[key];
+    b.gridKwh += gridImport[i];
+    b.cost += gridImport[i]*slots[i].rate;
+    b.baselineGridKwh += baselineGrid[i];
+    b.baselineCost += baselineGrid[i]*slots[i].rate;
+  }
+  const bandBreakdown = Object.values(bandMap).sort((a,b)=>b.rate-a.rate);
+
+  // Aggregate
+  const months = {};
+  for(const k of Object.keys(monthDays)){
+    months[k] = {kwh:0, cost:0, gridKwh:0, days:new Set(monthDays[k]), standing:0};
+  }
+  for(let i=0;i<n;i++){
+    const s = slots[i];
+    const key = s.monthKey;
+    if(!months[key]) months[key]={kwh:0,cost:0,gridKwh:0,days:new Set(),standing:0};
+    months[key].kwh += s.load;
+    months[key].gridKwh += gridImport[i];
+    months[key].cost += gridImport[i]*s.rate;
+  }
+
+  let standingTotal = 0;
+  const monthKeys = Object.keys(months).sort();
+  for(const k of monthKeys){
+    const m = months[k];
+    const sc = (m.days?m.days.size:0) * standing;
+    m.standing = sc;
+    standingTotal += sc;
+  }
+
+  let totalCost = 0, totalKwh = 0, totalGridKwh = 0, baselineCost = 0;
+  let totalCharged = 0, totalDischarged = 0;
+  for(let i=0;i<n;i++){
+    totalCost += gridImport[i]*slots[i].rate;
+    baselineCost += baselineGrid[i]*slots[i].rate;
+    totalKwh += slots[i].load;
+    totalGridKwh += gridImport[i];
+  }
+  // charge/discharge totals (if ESS arrays exist)
+  if(typeof chargeAmt !== 'undefined'){
+    for(let i=0;i<n;i++){ totalCharged += chargeAmt[i]; totalDischarged += dischargeAmt[i]; }
+  }
+  totalCost += standingTotal;
+  baselineCost += standingTotal;
+
+  return {
+    months, totalCost, totalKwh, totalGridKwh, baselineCost, standingTotal,
+    totalCharged, totalDischarged, bandBreakdown,
+    monthKeys, daysSet: allDays
+  };
 }
 
 document.getElementById('file').addEventListener('change', async (e)=>{
@@ -439,48 +642,22 @@ document.getElementById('file').addEventListener('change', async (e)=>{
 
 function runCalculation(){
   if(!dataRows.length){ alert('Upload a CSV first'); return; }
-  const bands = getBands();
-  const defaultRate = parseFloat(document.getElementById('defaultRate').value)||0;
-  const standing = parseFloat(document.getElementById('standing').value)||0;
-
-  const months = {};
-  const daysSet = new Set();
-  let totalCost = 0, totalKwh = 0;
-  for(const r of dataRows){
-    const durMs = r.end.getTime() - r.start.getTime();
-    const durMin = Math.max(1, Math.round(durMs/60000));
-    const perMinEnergy = r.energy / durMin;
-    let cost = 0;
-    for(let i=0;i<durMin;i++){
-      const t = new Date(r.start.getTime() + i*60000);
-      const rate = rateFor(t, bands, defaultRate);
-      cost += perMinEnergy * rate;
-    }
-    totalCost += cost; totalKwh += r.energy;
-    const key = r.start.getFullYear()+'-'+String(r.start.getMonth()+1).padStart(2,'0');
-    if(!months[key]) months[key]={kwh:0,cost:0,days:new Set()};
-    months[key].kwh += r.energy;
-    months[key].cost += cost;
-    const dk = r.start.getFullYear()+'-'+String(r.start.getMonth()+1).padStart(2,'0')+'-'+String(r.start.getDate()).padStart(2,'0');
-    months[key].days.add(dk);
-    daysSet.add(dk);
-  }
-  let standingTotal = 0;
-  const monthKeys = Object.keys(months).sort();
-  for(const k of monthKeys){
-    const m = months[k];
-    const sc = m.days.size * standing;
-    m.standing = sc;
-    standingTotal += sc;
-  }
-  const grandTotal = totalCost + standingTotal;
+  const cfg = collectConfig();
+  const res = simulate(cfg);
+  if(!res){ alert('No data'); return; }
+  const {months, totalCost, totalKwh, baselineCost, standingTotal, monthKeys, daysSet} = res;
 
   document.getElementById('summary').innerHTML = `
     <div class="stat"><span>Total energy</span><span class="v">${totalKwh.toFixed(2)} kWh</span></div>
-    <div class="stat"><span>Energy cost</span><span class="v">£${totalCost.toFixed(2)}</span></div>
+    <div class="stat"><span>Grid import</span><span class="v">${res.totalGridKwh.toFixed(2)} kWh</span></div>
+    <div class="stat"><span>Energy cost (with ESS)</span><span class="v">£${totalCost.toFixed(2)}</span></div>
+    <div class="stat"><span>Energy cost (no ESS)</span><span class="v">£${baselineCost.toFixed(2)}</span></div>
+    <div class="stat"><span>ESS savings</span><span class="v">£${(baselineCost-totalCost).toFixed(2)}</span></div>
+    <div class="stat"><span>ESS charged</span><span class="v">${res.totalCharged.toFixed(2)} kWh</span></div>
+    <div class="stat"><span>ESS discharged</span><span class="v">${res.totalDischarged.toFixed(2)} kWh</span></div>
     <div class="stat"><span>Standing charge</span><span class="v">£${standingTotal.toFixed(2)} (${daysSet.size} days)</span></div>
-    <div class="stat"><span><strong>Annual total</strong></span><span class="v total">£${grandTotal.toFixed(2)}</span></div>
-    <div class="stat"><span>Avg rate (incl. standing)</span><span class="v">£${(grandTotal/totalKwh).toFixed(4)}/kWh</span></div>
+    <div class="stat"><span><strong>Annual total</strong></span><span class="v total">£${(totalCost+standingTotal).toFixed(2)}</span></div>
+    <div class="stat"><span>Avg rate (incl. standing)</span><span class="v">£${((totalCost+standingTotal)/totalKwh).toFixed(4)}/kWh</span></div>
     <div class="stat"><span>Avg rate (energy only)</span><span class="v">£${(totalCost/totalKwh).toFixed(4)}/kWh</span></div>
   `;
 
@@ -496,6 +673,15 @@ function runCalculation(){
   const tr = document.createElement('tr');
   tr.innerHTML = `<td><strong>Total</strong></td><td><strong>${totalKwh.toFixed(2)}</strong></td><td><strong>${totalCost.toFixed(2)}</strong></td><td><strong>${(totalCost/totalKwh).toFixed(4)}</strong></td><td><strong>${standingTotal.toFixed(2)}</strong></td>`;
   tbody.appendChild(tr);
+
+  // Band breakdown
+  const btbody = document.querySelector('#bandsBreakdown tbody');
+  btbody.innerHTML = '';
+  for(const b of (res.bandBreakdown||[])){
+    const trb = document.createElement('tr');
+    trb.innerHTML = `<td>${b.name}</td><td>${b.rate.toFixed(4)}</td><td>${b.gridKwh.toFixed(2)} kWh (£${b.cost.toFixed(2)})</td><td>${b.baselineGridKwh.toFixed(2)} kWh (£${b.baselineCost.toFixed(2)})</td>`;
+    btbody.appendChild(trb);
+  }
 
   window._lastMonths = months;
   window._lastMonthKeys = monthKeys;
