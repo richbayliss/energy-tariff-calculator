@@ -123,6 +123,21 @@
       </div>
     </div>
     <div class="card">
+      <h2>Make a dataset (no meter data)</h2>
+      <div class="form-grid">
+        <label>Dataset name<input type="text" id="synthName" value="Synthetic dataset" /></label>
+        <label>Annual usage (kWh)<input type="number" id="synthAnnual" step="1" value="10000" /></label>
+        <label>Peak power (kW)<input type="number" id="synthPeakKw" step="0.1" value="10" /></label>
+        <label>Peak duration (min/day)<input type="number" id="synthPeakMin" step="1" value="30" /></label>
+        <label>Peak hour (0-23)<input type="number" id="synthPeakHour" step="1" min="0" max="23" value="18" /></label>
+      </div>
+      <div class="form-row" style="margin-top:8px">
+        <button class="secondary" id="makeDataset" type="button">Generate dataset</button>
+      </div>
+      <div class="hint">Builds an hourly year of data from your annual total: a daily peak appliance plus a seasonal base load (winter evenings boosted). Saved as a stored dataset.</div>
+      <div id="synthInfo" class="info"></div>
+    </div>
+    <div class="card">
       <h2>ESS (site)</h2>
       <div class="form-grid">
         <label>Capacity (kWh)<input type="number" id="essCapacity" step="0.1" value="0" /></label>
@@ -1046,6 +1061,96 @@ document.getElementById('saveDataset').addEventListener('click', ()=>{
   refreshDatasetSelect();
   const sel = document.getElementById('datasetSelect'); if(sel) sel.value = name;
 });
+
+document.getElementById('makeDataset').addEventListener('click', ()=>{
+  const name = (document.getElementById('synthName').value.trim()) || 'Synthetic dataset';
+  const annual = parseFloat(document.getElementById('synthAnnual').value);
+  const peakKw = parseFloat(document.getElementById('synthPeakKw').value);
+  const peakMin = parseFloat(document.getElementById('synthPeakMin').value);
+  const peakHour = parseInt(document.getElementById('synthPeakHour').value,10);
+  if(!annual || annual<=0){ alert('Enter annual usage in kWh'); return; }
+  const rows = generateSyntheticDataset({annual, peakKw, peakMin, peakHour});
+  const list = getStoredDatasets();
+  const idx = list.findIndex(d=>d.name===name);
+  const entry = {name, rows: serializeRows(rows), savedAt: new Date().toISOString()};
+  if(idx>=0) list[idx]=entry; else list.push(entry);
+  setStoredDatasets(list);
+  refreshDatasetSelect();
+  applyDataset(rows, name);
+  const sel = document.getElementById('datasetSelect'); if(sel) sel.value = name;
+  const info = document.getElementById('synthInfo');
+  if(info) info.innerHTML = `<span class="pill">${rows.length} PTUs</span> <span class="muted">Total ${rows.reduce((a,r)=>a+r.energy,0).toFixed(2)} kWh saved as "${name}"</span>`;
+});
+
+function isLeapYear(y){ return (y%4===0 && y%100!==0) || (y%400===0); }
+
+function generateSyntheticDataset(opts){
+  const annual = Math.max(0, parseFloat(opts.annual)||0);
+  const peakKw = Math.max(0, parseFloat(opts.peakKw)||0);
+  const peakMin = Math.max(0, parseFloat(opts.peakMin)||0);
+  const peakHour = Math.max(0, Math.min(23, parseInt(opts.peakHour,10)||18));
+  const year = new Date().getFullYear();
+  const daysInYear = isLeapYear(year) ? 366 : 365;
+  const monthFactor = [1.15,1.12,1.05,0.95,0.85,0.80,0.80,0.85,0.95,1.05,1.12,1.15];
+  const mfMean = monthFactor.reduce((a,b)=>a+b,0)/12;
+  const mf = monthFactor.map(f=>f/mfMean);
+  const hourWeights = [0.6,0.55,0.5,0.5,0.5,0.6,0.75,0.9,0.95,0.9,0.85,0.85,0.9,0.85,0.8,0.85,0.95,1.1,1.2,1.25,1.2,1.1,0.95,0.75];
+  const hwMean = hourWeights.reduce((a,b)=>a+b,0)/24;
+  const hw = hourWeights.map(w=>w/hwMean);
+
+  const peakDailyKwh = peakKw * (peakMin/60);
+  let baseAnnual = annual - peakDailyKwh * daysInYear;
+  if(baseAnnual < 0){ baseAnnual = 0; }
+
+  // Build slot metadata
+  const slotMeta = [];
+  let totalBaseRaw = 0;
+  for(let di=0; di<daysInYear; di++){
+    const dayStart = new Date(year,0,1,0,0,0);
+    dayStart.setDate(dayStart.getDate()+di);
+    const month = dayStart.getMonth();
+    for(let h=0; h<24; h++){
+      const dt = new Date(dayStart.getFullYear(), dayStart.getMonth(), dayStart.getDate(), h,0,0);
+      const raw = mf[month] * hw[h];
+      slotMeta.push({dt, month, h, raw});
+      totalBaseRaw += raw;
+    }
+  }
+  const basePerRaw = totalBaseRaw>0 ? baseAnnual/totalBaseRaw : 0;
+
+  const rows = [];
+  for(const m of slotMeta){
+    const dt = m.dt;
+    const end = new Date(dt.getTime()+3600000);
+    let energy = basePerRaw * m.raw;
+    const isWinter = m.month<=1 || m.month>=10;
+    if(isWinter && m.h>=16 && m.h<=21){
+      energy *= 1.08;
+    }
+    rows.push({start:dt, end:end, energy: Math.max(0, energy)});
+  }
+  // Distribute daily peak appliance across its duration starting at peakHour
+  if(peakKw>0 && peakMin>0){
+    for(let di=0; di<daysInYear; di++){
+      for(let mi=0; mi<peakMin; mi++){
+        const totalMin = peakHour*60 + mi;
+        const h = Math.floor(totalMin/60);
+        if(h>23) break;
+        const idx = di*24 + h;
+        if(idx < rows.length){
+          rows[idx].energy += peakKw/60;
+        }
+      }
+    }
+  }
+  // Normalize to annual
+  const total = rows.reduce((a,r)=>a+r.energy,0);
+  if(total>0){
+    const scale = annual/total;
+    for(const r of rows) r.energy = r.energy*scale;
+  }
+  return rows;
+}
 
 async function runCalculation(){
   if(!dataRows.length){ alert('Upload a CSV first'); return; }
