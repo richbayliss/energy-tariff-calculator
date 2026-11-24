@@ -1002,13 +1002,15 @@ function chartColor(name, orderedBands){
 function showTooltip(id, breakdown, e){
   const tip=document.getElementById(id);
   if(!tip || !breakdown) return;
-  const unit = (typeof chartView!=='undefined' && chartView==='energy') ? 'kWh' : '£';
+  const isEnergy = (typeof chartView!=='undefined' && chartView==='energy');
+  const unit = isEnergy ? 'kWh' : '£';
+  const fmt = (v) => isEnergy ? (v.toFixed(2)+' kWh') : ('£'+v.toFixed(2));
   const total=breakdown.segs.reduce((a,s)=>a+s.value,0);
   let html='<div class="tt-title">'+breakdown.title+'</div>';
   for(const s of breakdown.segs){
-    html+='<div class="tt-row"><span><i class="tt-swatch" style="background:'+s.color+'"></i>'+s.name+'</span><span>'+s.value.toFixed(2)+' '+unit+'</span></div>';
+    html+='<div class="tt-row"><span><i class="tt-swatch" style="background:'+s.color+'"></i>'+s.name+'</span><span>'+fmt(s.value)+'</span></div>';
   }
-  html+='<div class="tt-row" style="border-top:1px solid #334155;margin-top:4px;padding-top:4px;font-weight:600"><span>Total</span><span>'+total.toFixed(2)+' '+unit+'</span></div>';
+  html+='<div class="tt-row" style="border-top:1px solid #334155;margin-top:4px;padding-top:4px;font-weight:600"><span>Total</span><span>'+fmt(total)+'</span></div>';
   tip.innerHTML=html;
   tip.classList.remove('hidden');
   const x=e.clientX+12, y=e.clientY+12;
