@@ -73,6 +73,8 @@
     <input type="number" id="essChargePower" step="0.1" value="0" />
     <label style="margin-top:8px">Discharge power (kW)</label>
     <input type="number" id="essDischargePower" step="0.1" value="0" />
+    <label style="margin-top:8px">Round-trip efficiency (%)</label>
+    <input type="number" id="essEfficiency" step="1" min="0" max="100" value="100" />
     <div class="hint">Site property. Arbitrage: charges off-peak, discharges to meet demand. No grid export. Saved with the browser. Set charge power high enough to fill capacity in your off-peak window (Octopus Go: 5 h).</div>
 
     <h2 style="margin-top:16px">2. Tariff configuration</h2>
@@ -424,10 +426,11 @@ updateCurrentLabel();
       document.getElementById('essCapacity').value = saved.capacity!=null?saved.capacity:0;
       document.getElementById('essChargePower').value = saved.chargePower!=null?saved.chargePower:0;
       document.getElementById('essDischargePower').value = saved.dischargePower!=null?saved.dischargePower:0;
+      document.getElementById('essEfficiency').value = saved.efficiency!=null?saved.efficiency:100;
     }
   } catch(e){}
 })();
-['essCapacity','essChargePower','essDischargePower'].forEach(id=>{
+['essCapacity','essChargePower','essDischargePower','essEfficiency'].forEach(id=>{
   const el = document.getElementById(id);
   if(el) el.addEventListener('change', persistEss);
   if(el) el.addEventListener('input', persistEss);
@@ -485,21 +488,23 @@ function getEssConfig(){
   let cap = readInput('essCapacity');
   let ch = readInput('essChargePower');
   let dis = readInput('essDischargePower');
-  if(cap==null || ch==null || dis==null){
+  let eff = readInput('essEfficiency');
+  if(cap==null || ch==null || dis==null || eff==null){
     try {
       const saved = JSON.parse(localStorage.getItem('essSettings')||'null');
-      if(saved){ cap = saved.capacity||0; ch = saved.chargePower||0; dis = saved.dischargePower||0; }
-      else { cap=0; ch=0; dis=0; }
-    } catch(e){ cap=0; ch=0; dis=0; }
+      if(saved){ cap = saved.capacity||0; ch = saved.chargePower||0; dis = saved.dischargePower||0; eff = saved.efficiency!=null?saved.efficiency:100; }
+      else { cap=0; ch=0; dis=0; eff=100; }
+    } catch(e){ cap=0; ch=0; dis=0; eff=100; }
   }
-  return {capacity:cap||0, chargePower:ch||0, dischargePower:dis||0};
+  return {capacity:cap||0, chargePower:ch||0, dischargePower:dis||0, efficiency: eff==null?100:eff};
 }
 
 function persistEss(){
   const cfg = {
     capacity: parseFloat(document.getElementById('essCapacity').value)||0,
     chargePower: parseFloat(document.getElementById('essChargePower').value)||0,
-    dischargePower: parseFloat(document.getElementById('essDischargePower').value)||0
+    dischargePower: parseFloat(document.getElementById('essDischargePower').value)||0,
+    efficiency: parseFloat(document.getElementById('essEfficiency').value)||100
   };
   localStorage.setItem('essSettings', JSON.stringify(cfg));
 }
@@ -558,57 +563,63 @@ function simulate(cfg){
   const cRate = chargePower>0?chargePower/60:0;
   const dRate = dischargePower>0?dischargePower/60:0;
 
-  if(cap>0 && (cRate>0 || dRate>0)){
-    const chargeAmt = new Array(n).fill(0);
-    const dischargeAmt = new Array(n).fill(0);
+  const chargeAmt = new Array(n).fill(0);
+  const dischargeAmt = new Array(n).fill(0);
 
-    // Group slot indices by day
-    const byDay = {};
+  const eff = (ess.efficiency != null ? ess.efficiency : 100) / 100;
+  const effSafe = (eff > 0 && eff <= 1) ? eff : 1;
+
+  if(cap>0 && (cRate>0 || dRate>0)){
+    // off-peak rate per day (cheapest band)
+    const dayMinRate = {};
     for(let i=0;i<n;i++){
       const dk = slots[i].dayKey;
-      if(!byDay[dk]) byDay[dk]=[];
-      byDay[dk].push(i);
+      if(dayMinRate[dk] == null || slots[i].rate < dayMinRate[dk]) dayMinRate[dk] = slots[i].rate;
     }
+    const isOffPeak = (i) => slots[i].rate === dayMinRate[slots[i].dayKey];
+    const isDischargeCandidate = (i) => slots[i].rate > dayMinRate[slots[i].dayKey];
 
-    for(const dk of Object.keys(byDay)){
-      const idxs = byDay[dk];
-      // charge capacity per slot (kWh)
-      const cRem = idxs.map(()=>cRate);
-      // discharge capacity per slot (kWh)
-      const dRem = idxs.map(i=>Math.min(dRate, slots[i].load));
-      // map from local to global index
-      // sorted charge slots by rate asc
-      const chargeSlots = idxs.map((gi,li)=>({li:li, gi:gi, rate:slots[gi].rate})).sort((a,b)=>a.rate-b.rate);
-      // sorted discharge slots by rate desc
-      const dischargeSlots = idxs.map((gi,li)=>({li:li, gi:gi, rate:slots[gi].rate})).sort((a,b)=>b.rate-a.rate);
-
-      let remCap = cap;
-      let ci = 0, di = 0;
-      // advance helpers
-      while(ci < chargeSlots.length && di < dischargeSlots.length && remCap > 1e-9){
-        const cs = chargeSlots[ci];
-        const ds = dischargeSlots[di];
-        if(cs.rate >= ds.rate - 1e-12) break; // no profit
-        if(cs.gi === ds.gi){ ci++; continue; } // same slot
-        const amt = Math.min(cRem[cs.li], dRem[ds.li], remCap);
-        if(amt <= 1e-9){ 
-          if(cRem[cs.li] <= 1e-9) ci++;
-          if(dRem[ds.li] <= 1e-9) di++;
-          continue;
-        }
-        chargeAmt[cs.gi] += amt;
-        dischargeAmt[ds.gi] += amt;
-        cRem[cs.li] -= amt;
-        dRem[ds.li] -= amt;
-        remCap -= amt;
-        if(cRem[cs.li] <= 1e-9) ci++;
-        if(dRem[ds.li] <= 1e-9) di++;
+    // discharge capacity in charge-energy units per slot
+    const dRem = new Array(n).fill(0);
+    for(let i=0;i<n;i++){
+      if(isDischargeCandidate(i)){
+        const load = slots[i].load;
+        dRem[i] = Math.min(dischargePower/(60*effSafe), (load > 0 ? load/effSafe : 0));
       }
     }
+    let lastDischargeIdx = -1;
+    for(let i=0;i<n;i++) if(isDischargeCandidate(i)) lastDischargeIdx = i;
+    const totalDischargeCap = dRem.reduce((a,b)=>a+b,0);
 
+    // chronological pass with carryover SOC
+    let SOC = 0;
+    let cumulativeCharge = 0;
     for(let i=0;i<n;i++){
-      gridImport[i] = slots[i].load + chargeAmt[i] - dischargeAmt[i];
-      if(gridImport[i] < 0) gridImport[i] = 0;
+      if(isOffPeak(i) && i < lastDischargeIdx && cumulativeCharge < totalDischargeCap - 1e-9){
+        const charge = Math.min(cRate, Math.max(0, cap - SOC), Math.max(0, totalDischargeCap - cumulativeCharge));
+        if(charge > 1e-9){
+          chargeAmt[i] += charge;
+          gridImport[i] = slots[i].load + charge;
+          SOC += charge;
+          cumulativeCharge += charge;
+        }
+      }
+      if(isDischargeCandidate(i)){
+        const maxDischarge = Math.min(dRem[i], SOC);
+        if(maxDischarge > 1e-9){
+          const loadOffset = maxDischarge * effSafe;
+          dischargeAmt[i] += loadOffset;
+          gridImport[i] = slots[i].load + chargeAmt[i] - dischargeAmt[i];
+          if(gridImport[i] < 0) gridImport[i] = 0;
+          SOC -= maxDischarge;
+        } else {
+          gridImport[i] = slots[i].load + chargeAmt[i] - dischargeAmt[i];
+          if(gridImport[i] < 0) gridImport[i] = 0;
+        }
+      } else {
+        gridImport[i] = slots[i].load + chargeAmt[i] - dischargeAmt[i];
+        if(gridImport[i] < 0) gridImport[i] = 0;
+      }
     }
   }
 
