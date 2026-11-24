@@ -122,6 +122,11 @@
     <div style="overflow-x:auto">
       <table id="bandsBreakdown"><thead><tr><th>Band</th><th>Rate £/kWh</th><th>With ESS</th><th>Without ESS</th></tr></thead><tbody></tbody></table>
     </div>
+    <h3 style="margin:16px 0 8px;font-size:1rem;color:var(--accent)">ESS workings (per day)</h3>
+    <div style="overflow-x:auto">
+      <table id="essWorkings"><thead><tr><th>Day</th><th>Off-peak £/kWh</th><th>Charged kWh</th><th>Discharged kWh</th></tr></thead><tbody></tbody></table>
+    </div>
+    <button id="exportWorkings" class="secondary" type="button">Export workings CSV</button>
      <h3 style="margin:16px 0 8px;font-size:1rem;color:var(--accent)">Monthly by band</h3>
      <div class="chart-toggles">
        <button id="viewEnergy" class="secondary active" type="button">Energy (kWh)</button>
@@ -544,7 +549,7 @@ function simulate(cfg){
       const bandName = matchedBand ? matchedBand.name : 'Default';
       const mk = t.getFullYear()+'-'+String(t.getMonth()+1).padStart(2,'0');
       const dk = t.getFullYear()+'-'+String(t.getMonth()+1).padStart(2,'0')+'-'+String(t.getDate()).padStart(2,'0');
-      slots.push({rate:rate, load:perMinEnergy, monthKey:mk, dayKey:dk, bandName:bandName});
+      slots.push({rate:rate, load:perMinEnergy, monthKey:mk, dayKey:dk, bandName:bandName, minute:mins, time:t.toISOString()});
     }
     const dk = r.start.getFullYear()+'-'+String(r.start.getMonth()+1).padStart(2,'0')+'-'+String(r.start.getDate()).padStart(2,'0');
     allDays.add(dk);
@@ -565,19 +570,25 @@ function simulate(cfg){
 
   const chargeAmt = new Array(n).fill(0);
   const dischargeAmt = new Array(n).fill(0);
+  const socAfter = new Array(n).fill(0);
+  const offPeakRateArr = new Array(n).fill(null);
 
   const eff = (ess.efficiency != null ? ess.efficiency : 100) / 100;
   const effSafe = (eff > 0 && eff <= 1) ? eff : 1;
 
+  // off-peak rate per day (cheapest band)
+  const dayMinRate = {};
+  for(let i=0;i<n;i++){
+    const dk = slots[i].dayKey;
+    if(dayMinRate[dk] == null || slots[i].rate < dayMinRate[dk]) dayMinRate[dk] = slots[i].rate;
+  }
+  for(let i=0;i<n;i++){ offPeakRateArr[i] = dayMinRate[slots[i].dayKey]; }
+
   if(cap>0 && (cRate>0 || dRate>0)){
-    const dayMinRate = {};
-    for(let i=0;i<n;i++){
-      const dk = slots[i].dayKey;
-      if(dayMinRate[dk] == null || slots[i].rate < dayMinRate[dk]) dayMinRate[dk] = slots[i].rate;
-    }
     const isOffPeak = (i) => slots[i].rate === dayMinRate[slots[i].dayKey];
     const isDischargeCandidate = (i) => slots[i].rate > dayMinRate[slots[i].dayKey];
 
+    // discharge capacity in charge-energy units per slot
     const dRem = new Array(n).fill(0);
     for(let i=0;i<n;i++){
       if(isDischargeCandidate(i)){
@@ -589,6 +600,7 @@ function simulate(cfg){
     for(let i=0;i<n;i++) if(isDischargeCandidate(i)) lastDischargeIdx = i;
     const totalDischargeCap = dRem.reduce((a,b)=>a+b,0);
 
+    // chronological pass with carryover SOC
     let SOC = 0;
     let cumulativeCharge = 0;
     for(let i=0;i<n;i++){
@@ -617,6 +629,7 @@ function simulate(cfg){
         gridImport[i] = slots[i].load + chargeAmt[i] - dischargeAmt[i];
         if(gridImport[i] < 0) gridImport[i] = 0;
       }
+      socAfter[i] = SOC;
     }
   }
 
@@ -681,10 +694,16 @@ function simulate(cfg){
   totalCost += standingTotal;
   baselineCost += standingTotal;
 
+  const slotWork = slots.map((s,i)=>({
+    time: s.time, dayKey: s.dayKey, minute: s.minute, rate: s.rate,
+    bandName: s.bandName, load: s.load, offPeakRate: offPeakRateArr[i],
+    charge: chargeAmt[i], discharge: dischargeAmt[i], soc: socAfter[i]
+  }));
+
   return {
     months, totalCost, totalKwh, totalGridKwh, baselineCost, standingTotal,
     totalCharged, totalDischarged, bandBreakdown, bandNames,
-    monthKeys, daysSet: allDays
+    monthKeys, daysSet: allDays, slotWork
   };
 }
 
@@ -770,9 +789,28 @@ function runCalculation(){
     btbody.appendChild(trb);
   }
 
+  // ESS workings per day
+  const wtbody = document.querySelector('#essWorkings tbody');
+  if(wtbody){
+    wtbody.innerHTML = '';
+    const byDay = {};
+    for(const s of (res.slotWork||[])){
+      if(!byDay[s.dayKey]) byDay[s.dayKey] = {offPeak:s.offPeakRate, charged:0, discharged:0};
+      byDay[s.dayKey].charged += s.charge;
+      byDay[s.dayKey].discharged += s.discharge;
+    }
+    for(const dk of Object.keys(byDay).sort()){
+      const d = byDay[dk];
+      const trw = document.createElement('tr');
+      trw.innerHTML = `<td>${dk}</td><td>${d.offPeak.toFixed(4)}</td><td>${d.charged.toFixed(3)}</td><td>${d.discharged.toFixed(3)}</td>`;
+      wtbody.appendChild(trw);
+    }
+  }
+
   window._lastMonths = months;
   window._lastMonthKeys = monthKeys;
   window._lastResult = res;
+  window._lastSlotWork = res.slotWork||[];
   renderChart();
 }
 let chartView = 'energy'; // 'energy' | 'cost'
@@ -883,6 +921,21 @@ document.getElementById('essWithout').addEventListener('click', ()=>{
   chartEss='without';
   setToggle('essWithout', true); setToggle('essWith', false);
   renderChart();
+});
+document.getElementById('exportWorkings').addEventListener('click', ()=>{
+  const rows = window._lastSlotWork||[];
+  if(!rows.length){ alert('Run a calculation first'); return; }
+  const header = ['time','day','minute','band','rate','offPeakRate','loadKwh','chargedKwh','dischargedKwh','socAfter'];
+  const lines = [header.join(',')];
+  for(const r of rows){
+    lines.push([r.time,r.dayKey,r.minute,r.bandName,r.rate,r.offPeakRate,r.load,r.charge,r.discharge,r.soc].map(v=> (typeof v==='number'? v : JSON.stringify(v))).join(','));
+  }
+  const blob = new Blob([lines.join('\\n')], {type:'text/csv'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = 'ess_workings.csv';
+  document.body.appendChild(a); a.click(); a.remove();
+  URL.revokeObjectURL(url);
 });
 
 document.getElementById('calc').addEventListener('click', runCalculation);
