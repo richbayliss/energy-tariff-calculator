@@ -26,6 +26,8 @@ This repository is a static site and is compatible with GitHub Pages.
   locally in the browser.
 - `sw.js` is a service worker providing offline support and background updates
   of `tariffs.json`.
-- Deployment is automated via `.github/workflows/deploy-pages.yml`.
+- Deployment: GitHub Pages serves from the `main` branch (root). In repo
+  settings set Pages source to "Deploy from a branch" (main, /). No Actions
+  workflow is required.
 
 To enable: in the repository settings, set Pages source to "GitHub Actions".
