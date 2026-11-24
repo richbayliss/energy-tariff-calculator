@@ -52,6 +52,10 @@
    .chart-legend{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px;font-size:.75rem}
    .chart-legend span{display:inline-flex;align-items:center;gap:4px}
    .chart-legend i{display:inline-block;width:10px;height:10px;border-radius:2px}
+   .chart-col-group{display:flex;align-items:flex-end;gap:2px}
+   .bar-group{display:flex;align-items:flex-end;gap:2px;height:100%;width:100%}
+   .bar-group .chart-seg{flex:1;position:relative;min-width:0}
+   .bar-label{position:absolute;top:-14px;left:0;right:0;text-align:center;font-size:.6rem;color:var(--fg);pointer-events:none}
    /* app shell */
    .appbar{display:flex;flex-direction:column;gap:12px;margin-bottom:16px}
    .brand h1{margin:0;font-size:1.4rem}
@@ -157,8 +161,7 @@
       <div class="table-wrap"><table id="bandsBreakdown"><thead><tr><th>Band</th><th>Rate £/kWh</th><th>With ESS</th><th>Without ESS</th></tr></thead><tbody></tbody></table></div>
     </div>
     <div class="card">
-      <h2>ESS workings (per day)</h2>
-      <div class="table-wrap"><table id="essWorkings"><thead><tr><th>Day</th><th>Off-peak £/kWh</th><th>Charged kWh</th><th>Discharged kWh</th></tr></thead><tbody></tbody></table></div>
+      <h2>ESS workings</h2>
       <button class="secondary" id="exportWorkings" type="button">Export workings CSV</button>
     </div>
     <div class="card">
@@ -1030,22 +1033,44 @@ function renderDailyChart(){
   const sel=document.getElementById('dailyMonth');
   const month=sel? sel.value : null;
   const days=res.daily.filter(d=>!month || d.monthKey===month);
-  const withEss = chartEss==='with';
-  const vals=days.map(d=>{
-    if(chartView==='energy') return withEss? d.withEssKwh : d.withoutEssKwh;
-    return (withEss? d.withEssCost : d.withoutEssCost) + (d.standing||0);
+  const valsWith=days.map(d=>{
+    if(chartView==='energy') return d.withEssKwh;
+    return d.withEssCost + (d.standing||0);
   });
-  const max=Math.max(1,...vals);
+  const valsWithout=days.map(d=>{
+    if(chartView==='energy') return d.withoutEssKwh;
+    return d.withoutEssCost + (d.standing||0);
+  });
+  const max=Math.max(1,...valsWith,...valsWithout);
   chart.innerHTML='';
   for(let i=0;i<days.length;i++){
     const col=document.createElement('div');
-    col.className='chart-col';
-    const div=document.createElement('div');
-    div.className='chart-seg';
-    div.style.height=(vals[i]/max*100)+'%';
-    div.style.background = withEss? '#38bdf8' : '#94a3b8';
-    div.title = days[i].day + ': ' + vals[i].toFixed(2);
-    col.appendChild(div);
+    col.className='chart-col chart-col-group';
+    // with
+    const wrap=document.createElement('div');
+    wrap.className='bar-group';
+    const b1=document.createElement('div');
+    b1.className='chart-seg';
+    b1.style.height=(valsWith[i]/max*100)+'%';
+    b1.style.background='#38bdf8';
+    b1.title = days[i].day + ' with ESS: ' + valsWith[i].toFixed(2);
+    const l1=document.createElement('div');
+    l1.className='bar-label';
+    l1.textContent=valsWith[i].toFixed(1);
+    b1.appendChild(l1);
+    // without
+    const b2=document.createElement('div');
+    b2.className='chart-seg';
+    b2.style.height=(valsWithout[i]/max*100)+'%';
+    b2.style.background='#94a3b8';
+    b2.title = days[i].day + ' without ESS: ' + valsWithout[i].toFixed(2);
+    const l2=document.createElement('div');
+    l2.className='bar-label';
+    l2.textContent=valsWithout[i].toFixed(1);
+    b2.appendChild(l2);
+    wrap.appendChild(b1);
+    wrap.appendChild(b2);
+    col.appendChild(wrap);
     chart.appendChild(col);
   }
   if(axis){
@@ -1058,9 +1083,12 @@ function renderDailyChart(){
   }
   if(legend){
     legend.innerHTML='';
-    const sp=document.createElement('span');
-    sp.innerHTML='<i style="background:'+(withEss?'#38bdf8':'#94a3b8')+'"></i>'+(withEss?'With ESS':'Without ESS');
-    legend.appendChild(sp);
+    const sp1=document.createElement('span');
+    sp1.innerHTML='<i style="background:#38bdf8"></i>With ESS';
+    const sp2=document.createElement('span');
+    sp2.innerHTML='<i style="background:#94a3b8"></i>Without ESS';
+    legend.appendChild(sp1);
+    legend.appendChild(sp2);
   }
 }
 
