@@ -61,6 +61,10 @@
    .chart-tooltip .tt-title{font-weight:600;margin-bottom:4px}
    .chart-tooltip .tt-row{display:flex;justify-content:space-between;gap:8px}
    .chart-tooltip .tt-swatch{display:inline-block;width:8px;height:8px;border-radius:2px;margin-right:4px}
+   .calc-status{display:flex;align-items:center;gap:8px;margin:8px 0;color:var(--muted);font-size:.85rem}
+   .calc-status.hidden{display:none}
+   .spinner{width:14px;height:14px;border:2px solid #334155;border-top-color:var(--accent);border-radius:50%;animation:spin 1s linear infinite;display:inline-block}
+   @keyframes spin{to{transform:rotate(360deg)}}
    /* app shell */
    .appbar{display:flex;flex-direction:column;gap:12px;margin-bottom:16px}
    .brand h1{margin:0;font-size:1.4rem}
@@ -105,6 +109,8 @@
       <input type="file" id="file" accept=".csv,text/csv" />
       <div class="hint">Columns: <code>period_start_local</code>, <code>period_end_local</code>, <code>energy_kwh</code> (or Octopus export). Timestamps may include UTC offset.</div>
       <div id="dataInfo" class="info"></div>
+      <label style="margin-top:12px;display:flex;align-items:center;gap:8px"><input type="checkbox" id="ignoreTimeOfDay" style="width:auto" /> Spread usage evenly across the day (ignore time of day)</label>
+      <div class="hint">When on, each day's total energy is averaged evenly across all of that day's slots, removing time-of-day usage bias so historical data stays comparable across tariffs.</div>
       <label style="margin-top:12px">Stored datasets</label>
       <div class="form-row">
         <select id="datasetSelect"></select>
@@ -165,7 +171,8 @@
         <button id="calc" type="button">Calculate</button>
         <button class="secondary" id="export" type="button">Export monthly CSV</button>
       </div>
-      <div id="summary" class="summary"></div>
+      <div id="calcStatus" class="calc-status hidden"><span class="spinner"></span> Calculating…</div>
+       <div id="summary" class="summary"></div>
     </div>
     <div class="card">
       <h2>Monthly breakdown</h2>
@@ -412,10 +419,92 @@ function seedBuiltins(){
 }
 
 function calcTotalForConfig(cfg){
-  const res = simulate(cfg);
+  const res = simulate(cfg, dataRows, getEssConfig(), localStorage.getItem('ignoreTimeOfDay')==='1');
   return res ? res.totalCost : null;
 }
 
+// --- Off-main-thread calculation worker ---
+let activeWorkers = new Set();
+let pendingResolvers = new Map();
+let requestSeq = 0;
+let calcDepth = 0;
+function setCalculating(on){
+  if(on){ calcDepth++; } else { calcDepth = Math.max(0, calcDepth-1); }
+  const el = document.getElementById('calcStatus');
+  if(el) el.classList.toggle('hidden', calcDepth===0);
+}
+function cancelAllCalculations(){
+  for(const w of [...activeWorkers]){
+    try { w.terminate(); } catch(e){}
+    if(w._id != null && pendingResolvers.has(w._id)){ pendingResolvers.get(w._id)(null); pendingResolvers.delete(w._id); }
+  }
+  activeWorkers.clear();
+}
+function createCalcWorker(){
+  const code = `
+    function toMinutes(t){
+      if(!t) return null;
+      const [h,m] = String(t).split(':').map(x=>parseInt(x,10));
+      if(isNaN(h)) return null;
+      return (h%24)*60 + (isNaN(m)?0:m);
+    }
+    function inTimeRange(mins,start,end){
+      if(start==null && end==null) return true;
+      if(start==null) start=0;
+      if(end==null) end=1440;
+      if(end===0 && start!==0) end=1440;
+      if(start===end) return true;
+      if(start<end) return mins>=start && mins<end;
+      return mins>=start || mins<end;
+    }
+    ${simulate.toString()}
+    self.onmessage = function(e){
+      const {id, mode, cfg, configs, rows, ess, ignoreTod} = e.data;
+      try {
+        if(mode === 'totals'){
+          const totals = (configs||[]).map(function(c){
+            const r = simulate(c, rows, ess, ignoreTod);
+            return r ? r.totalCost : null;
+          });
+          self.postMessage({id, result: totals});
+        } else {
+          const res = simulate(cfg, rows, ess, ignoreTod);
+          self.postMessage({id, result: res});
+        }
+      } catch(err){ self.postMessage({id, error: String(err && err.message || err)}); }
+    };
+  `;
+  const blob = new Blob([code], {type:'application/javascript'});
+  return new Worker(URL.createObjectURL(blob));
+}
+function workerRequest(payload){
+  cancelAllCalculations();
+  setCalculating(true);
+  const worker = createCalcWorker();
+  worker._id = ++requestSeq;
+  activeWorkers.add(worker);
+  payload.id = worker._id;
+  const id = worker._id;
+  const p = new Promise((resolve)=>{
+    pendingResolvers.set(id, resolve);
+    worker.onmessage = (e)=>{
+      if(e.data.id !== id) return;
+      pendingResolvers.delete(id);
+      activeWorkers.delete(worker);
+      if(e.data.error) resolve({__error:e.data.error}); else resolve(e.data.result);
+    };
+    worker.onerror = (err)=>{
+      pendingResolvers.delete(id);
+      activeWorkers.delete(worker);
+      resolve({__error: String(err && err.message || err)});
+    };
+    worker.postMessage(payload);
+  });
+  return p.finally(()=>setCalculating(false));
+}
+// --- end worker ---
+
+let renderTariffToken = 0;
 function renderTariffList(){
   const list = getSavedList();
   const container = document.getElementById('tariffList');
@@ -423,16 +512,17 @@ function renderTariffList(){
   if(!list.length){ container.innerHTML='<span class="muted">No tariffs saved.</span>'; return; }
   const ul = document.createElement('ul');
   ul.style.listStyle='none'; ul.style.padding='0'; ul.style.margin='0';
+  const entries = [];
   list.forEach(item=>{
     const li = document.createElement('li');
     li.style.display='flex'; li.style.alignItems='center'; li.style.gap='6px';
     li.style.padding='4px 0'; li.style.borderBottom='1px solid #334155';
     const name = document.createElement('span');
     name.style.flex='1';
-    const total = calcTotalForConfig(item.config);
-    name.textContent = item.name + (total!=null? '  — £'+total.toFixed(2) : '');
+    name.textContent = item.name;
     if(item.name===currentTariffName){ name.style.fontWeight='700'; name.style.color='var(--accent)'; }
     li.appendChild(name);
+    entries.push({nameSpan:name, item});
 
     const mkBtn = (label,cls,fn)=>{
       const b=document.createElement('button');
@@ -441,7 +531,7 @@ function renderTariffList(){
       b.addEventListener('click',fn);
       return b;
     };
-    li.appendChild(mkBtn('Load','',()=>{ applyConfig(item.config); currentTariffName=item.name; updateCurrentLabel(); renderTariffList(); if(dataRows.length) runCalculation(); }));
+    li.appendChild(mkBtn('Load','',async ()=>{ applyConfig(item.config); currentTariffName=item.name; updateCurrentLabel(); if(dataRows.length) await runCalculation(); renderTariffList(); }));
     li.appendChild(mkBtn('Rename','secondary',()=>{
       const newName = prompt('Rename tariff:', item.name);
       if(!newName || !newName.trim() || newName.trim()===item.name) return;
@@ -471,6 +561,20 @@ function renderTariffList(){
     ul.appendChild(li);
   });
   container.appendChild(ul);
+
+  // Compute totals in background (cancellable)
+  if(dataRows.length){
+    const token = ++renderTariffToken;
+    (async ()=>{
+      const totals = await workerRequest({mode:'totals', configs: list.map(x=>x.config), rows:dataRows, ess:getEssConfig(), ignoreTod: localStorage.getItem('ignoreTimeOfDay')==='1'});
+      if(token !== renderTariffToken) return;
+      if(!totals || totals === null || totals.__error) return;
+      entries.forEach(({nameSpan,item}, idx)=>{
+        const t = totals[idx];
+        if(t != null) nameSpan.textContent = item.name + '  — £'+t.toFixed(2);
+      });
+    })();
+  }
 }
 
 function updateCurrentLabel(){
@@ -537,6 +641,23 @@ updateCurrentLabel();
     }
   } catch(e){}
 })();
+// Load persisted "ignore time of day" setting
+(function loadIgnoreTod(){
+  try {
+    const v = localStorage.getItem('ignoreTimeOfDay');
+    const cb = document.getElementById('ignoreTimeOfDay');
+    if(cb) cb.checked = v === '1';
+  } catch(e){}
+  renderTariffList();
+})();
+const ignoreTodCb = document.getElementById('ignoreTimeOfDay');
+if(ignoreTodCb){
+  ignoreTodCb.addEventListener('change', async ()=>{
+    localStorage.setItem('ignoreTimeOfDay', ignoreTodCb.checked ? '1' : '0');
+    if(dataRows.length) await runCalculation();
+    renderTariffList();
+  });
+}
 ['essCapacity','essChargePower','essDischargePower','essEfficiency'].forEach(id=>{
   const el = document.getElementById(id);
   if(el) el.addEventListener('change', persistEss);
@@ -617,13 +738,14 @@ function persistEss(){
   localStorage.setItem('essSettings', JSON.stringify(cfg));
 }
 
-function simulate(cfg){
-  if(!dataRows.length) return null;
+function simulate(cfg, rows, essCfg, ignoreTodFlag){
+  const data = (rows && rows.length) ? rows : (typeof dataRows !== 'undefined' ? dataRows : []);
+  if(!data || !data.length) return null;
   if(!cfg) cfg={};
   const bands = (cfg.bands||[]).map(b=>({name:b.name,rate:b.rate,start:toMinutes(b.start),end:toMinutes(b.end),days:b.days||[],months:b.months||[]}));
   const defaultRate = cfg.defaultRate!=null?cfg.defaultRate:0;
   const standing = cfg.standing!=null?cfg.standing:0;
-  const ess = getEssConfig();
+  const ess = (essCfg != null) ? essCfg : (typeof getEssConfig === 'function' ? getEssConfig() : {capacity:0,chargePower:0,dischargePower:0,efficiency:100});
   const capacity = ess.capacity||0;
   const chargePower = ess.chargePower||0;
   const dischargePower = ess.dischargePower||0;
@@ -632,7 +754,7 @@ function simulate(cfg){
   const slots = [];
   const monthDays = {};
   const allDays = new Set();
-  for(const r of dataRows){
+  for(const r of data){
     const durMs = r.end.getTime() - r.start.getTime();
     const durMin = Math.max(1, Math.round(durMs/60000));
     const perMinEnergy = r.energy / durMin;
@@ -659,6 +781,21 @@ function simulate(cfg){
     const mk2 = r.start.getFullYear()+'-'+String(r.start.getMonth()+1).padStart(2,'0');
     if(!monthDays[mk2]) monthDays[mk2]=new Set();
     monthDays[mk2].add(dk);
+  }
+
+  const ignoreTod = (ignoreTodFlag != null) ? !!ignoreTodFlag : (localStorage.getItem('ignoreTimeOfDay') === '1');
+  // Optionally ignore time-of-day: spread each day's total energy evenly across its slots
+  if (ignoreTod) {
+    const dayLoad = {};
+    const dayCount = {};
+    for(const s of slots){
+      dayLoad[s.dayKey] = (dayLoad[s.dayKey]||0) + s.load;
+      dayCount[s.dayKey] = (dayCount[s.dayKey]||0) + 1;
+    }
+    for(const s of slots){
+      const c = dayCount[s.dayKey] || 1;
+      s.load = (dayLoad[s.dayKey]||0) / c;
+    }
   }
 
   const n = slots.length;
@@ -910,10 +1047,12 @@ document.getElementById('saveDataset').addEventListener('click', ()=>{
   const sel = document.getElementById('datasetSelect'); if(sel) sel.value = name;
 });
 
-function runCalculation(){
+async function runCalculation(){
   if(!dataRows.length){ alert('Upload a CSV first'); return; }
   const cfg = collectConfig();
-  const res = simulate(cfg);
+  const res = await workerRequest({mode:'single', cfg:cfg, rows:dataRows, ess:getEssConfig(), ignoreTod: localStorage.getItem('ignoreTimeOfDay')==='1'});
+  if(res === null){ return; } // cancelled
+  if(!res || res.__error){ if(res && res.__error) console.error(res.__error); alert('Calculation failed'); return; }
   if(!res){ alert('No data'); return; }
   const {months, totalCost, totalKwh, baselineCost, standingTotal, monthKeys, daysSet} = res;
 

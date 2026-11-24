@@ -1,4 +1,4 @@
-const CACHE = 'tariff-calc-v1';
+const CACHE = 'tariff-calc-v2';
 const PRECACHE = ['./', './index.html', './tariffs.json'];
 
 self.addEventListener('install', (e) => {
