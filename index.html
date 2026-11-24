@@ -818,9 +818,19 @@ let chartEss = 'with'; // 'with' | 'without'
 
 const CHART_COLORS = ['#38bdf8','#fbbf24','#4ade80','#f472b6','#a78bfa','#fb923c','#34d399','#60a5fa'];
 
-function bandColor(name, bandNames){
-  const idx = bandNames.indexOf(name);
-  return CHART_COLORS[(idx>=0?idx:0) % CHART_COLORS.length];
+const GREEN_SHADES = ['#166534','#15803d','#16a34a','#22c55e','#4ade80','#86efac'];
+
+function bandRate(name, res){
+  const b = (res.bandBreakdown||[]).find(x=>x.name===name);
+  return b ? b.rate : 0;
+}
+
+function isStandardBand(name){ return name === 'Default'; }
+
+function chartColor(name, orderedBands){
+  if(isStandardBand(name)) return '#fbbf24'; // yellow
+  const idx = orderedBands.indexOf(name);
+  return GREEN_SHADES[Math.min(idx, GREEN_SHADES.length-1)];
 }
 
 function renderChart(){
@@ -833,6 +843,15 @@ function renderChart(){
   const months = res.months;
   const bandNames = res.bandNames || [];
   const withEss = chartEss === 'with';
+
+  // Ordered bands: standard (Default) handled separately (bottom, yellow);
+  // other bands above in descending rate order (cheapest at top).
+  const otherBands = bandNames.filter(b=>!isStandardBand(b))
+    .sort((a,b)=>bandRate(b,res)-bandRate(a,res));
+
+  // Map band name -> index in bandNames for value lookup
+  const bandIndex = {};
+  bandNames.forEach((b,i)=>{ bandIndex[b]=i; });
 
   // Determine per-month per-band values and totals
   const monthData = monthKeys.map(k=>{
@@ -851,17 +870,20 @@ function renderChart(){
   for(const d of monthData){
     const col = document.createElement('div');
     col.className = 'chart-col';
-    // segments bottom->top: standing (cost only) first, then bands in bandNames order
     const segs = [];
     if(chartView==='cost' && d.standing>0){
       segs.push({name:'Standing', value:d.standing, color:'#64748b'});
     }
-    bandNames.forEach((b,i)=>{
-      segs.push({name:b, value:d.vals[i], color:bandColor(b, bandNames)});
-    });
-    // render bottom-first: column-reverse, so push standing first then bands? 
-    // We want standing at bottom. column-reverse renders DOM order bottom->top. So DOM order = bottom to top.
-    // Put standing first (bottom), then bands above.
+    // standard (Default) rate next
+    if(bandNames.includes('Default')){
+      const i = bandIndex['Default'];
+      segs.push({name:'Default', value:d.vals[i], color:'#fbbf24'});
+    }
+    // other bands in descending rate order (cheapest at top)
+    for(const b of otherBands){
+      const i = bandIndex[b];
+      segs.push({name:b, value:d.vals[i], color:chartColor(b, otherBands)});
+    }
     for(const seg of segs){
       const div = document.createElement('div');
       div.className = 'chart-seg';
@@ -888,7 +910,12 @@ function renderChart(){
   if(chartView==='cost'){
     legendItems.push({name:'Standing', color:'#64748b'});
   }
-  bandNames.forEach(b=>legendItems.push({name:b, color:bandColor(b, bandNames)}));
+  if(bandNames.includes('Default')){
+    legendItems.push({name:'Default (standard)', color:'#fbbf24'});
+  }
+  for(const b of otherBands){
+    legendItems.push({name:b, color:chartColor(b, otherBands)});
+  }
   for(const it of legendItems){
     const sp = document.createElement('span');
     sp.innerHTML = '<i style="background:'+it.color+'"></i>'+it.name;
