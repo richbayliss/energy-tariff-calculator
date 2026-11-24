@@ -1066,39 +1066,34 @@ function renderDailyChart(){
     return (withEss? d.withEssCost : d.withoutEssCost) + (d.standing||0);
   }
 
-  const totalsWith=days.map(d=>seriesTotal(d,true));
-  const totalsWithout=days.map(d=>seriesTotal(d,false));
-  const max=Math.max(1,...totalsWith,...totalsWithout);
+  const withEss = chartEss==='with';
+  const totals=days.map(d=>seriesTotal(d,withEss));
+  const max=Math.max(1,...totals);
   chart.innerHTML='';
   for(let i=0;i<days.length;i++){
     const col=document.createElement('div');
-    col.className='chart-col chart-col-group';
-    const wrap=document.createElement('div');
-    wrap.className='bar-group';
-    for(const withEss of [true,false]){
-      const total = withEss? totalsWith[i] : totalsWithout[i];
-      const bar=document.createElement('div');
-      bar.className='chart-seg chart-seg-stack';
-      bar.style.height=(total/max*100)+'%';
-      bar.style.background='transparent';
-      bar.style.display='flex';
-      bar.style.flexDirection='column-reverse';
-      const segs=seriesSegments(days[i], withEss);
-      for(const seg of segs){
-        const segDiv=document.createElement('div');
-        const pct = total>0 ? (seg.value/total*100) : 0;
-        segDiv.style.height = pct+'%';
-        segDiv.style.background = seg.color;
-        segDiv.title = days[i].day + ' ' + seg.name + ': ' + seg.value.toFixed(2);
-        bar.appendChild(segDiv);
-      }
-      const label=document.createElement('div');
-      label.className='bar-label';
-      label.textContent=total.toFixed(1);
-      bar.appendChild(label);
-      wrap.appendChild(bar);
+    col.className='chart-col';
+    const bar=document.createElement('div');
+    bar.className='chart-seg chart-seg-stack';
+    bar.style.height=(totals[i]/max*100)+'%';
+    bar.style.background='transparent';
+    bar.style.display='flex';
+    bar.style.flexDirection='column-reverse';
+    const segs=seriesSegments(days[i], withEss);
+    for(const seg of segs){
+      const segDiv=document.createElement('div');
+      const total = totals[i];
+      const pct = total>0 ? (seg.value/total*100) : 0;
+      segDiv.style.height = pct+'%';
+      segDiv.style.background = seg.color;
+      segDiv.title = days[i].day + ' ' + seg.name + ': ' + seg.value.toFixed(2);
+      bar.appendChild(segDiv);
     }
-    col.appendChild(wrap);
+    const label=document.createElement('div');
+    label.className='bar-label';
+    label.textContent=totals[i].toFixed(1);
+    bar.appendChild(label);
+    col.appendChild(bar);
     chart.appendChild(col);
   }
   if(axis){
@@ -1111,12 +1106,9 @@ function renderDailyChart(){
   }
   if(legend){
     legend.innerHTML='';
-    const sp1=document.createElement('span');
-    sp1.innerHTML='<i style="background:#38bdf8"></i>With ESS';
-    const sp2=document.createElement('span');
-    sp2.innerHTML='<i style="background:#94a3b8"></i>Without ESS';
-    legend.appendChild(sp1);
-    legend.appendChild(sp2);
+    const sp=document.createElement('span');
+    sp.innerHTML='<i style="background:'+(withEss?'#38bdf8':'#94a3b8')+'"></i>'+(withEss?'With ESS':'Without ESS');
+    legend.appendChild(sp);
   }
 }
 
