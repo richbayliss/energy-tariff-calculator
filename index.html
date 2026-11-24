@@ -52,95 +52,131 @@
    .chart-legend{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px;font-size:.75rem}
    .chart-legend span{display:inline-flex;align-items:center;gap:4px}
    .chart-legend i{display:inline-block;width:10px;height:10px;border-radius:2px}
+   /* app shell */
+   .appbar{display:flex;flex-direction:column;gap:12px;margin-bottom:16px}
+   .brand h1{margin:0;font-size:1.4rem}
+   .brand p{margin:4px 0 0;color:var(--muted);font-size:.9rem}
+   .tabs{display:flex;gap:8px;flex-wrap:wrap}
+   .tab{background:#334155;color:var(--fg);padding:8px 16px;border-radius:999px;font-weight:500}
+   .tab.active{background:var(--accent);color:#0f172a}
+   .app{max-width:1100px;margin:0 auto}
+   .panel{display:none}
+   .panel.active{display:block}
+   .card{margin-bottom:16px}
+   .card-head{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:8px}
+   .card-head h2{margin:0}
+   .form-grid{display:grid;gap:10px;grid-template-columns:repeat(auto-fit,minmax(160px,1fr))}
+   .form-grid label{margin:0}
+   .form-row{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}
+   .form-row>*{flex:1 1 140px}
+   .info{margin-top:8px;font-size:.85rem;color:var(--muted)}
+   .table-wrap{overflow-x:auto}
+   .summary .stat{border-bottom:1px solid #334155}
+   @media(min-width:900px){.appbar{flex-direction:row;justify-content:space-between;align-items:center}}
 </style>
 </head>
 <body>
-<h1>Annual Tariff Cost Calculator</h1>
-<p class="sub">Client-side. Upload an hourly PTU CSV, configure tariff bands, get annual &amp; monthly cost. No data leaves the browser.</p>
+<header class="appbar">
+  <div class="brand">
+    <h1>Energy Tariff Calculator</h1>
+    <p>Client-side. Upload a PTU CSV, configure tariffs and ESS, get annual &amp; monthly cost.</p>
+  </div>
+  <nav class="tabs" id="tabs">
+    <button class="tab active" data-tab="data">Data &amp; ESS</button>
+    <button class="tab" data-tab="tariff">Tariff</button>
+    <button class="tab" data-tab="results">Results</button>
+  </nav>
+</header>
 
-<div class="grid">
-  <div class="card">
-    <h2>1. Data</h2>
-    <label>CSV file (hourly PTU)</label>
-    <input type="file" id="file" accept=".csv,text/csv" />
-    <div class="hint">Expected columns: <code>period_start_local</code>, <code>period_end_local</code>, <code>energy_kwh</code> (or Octopus export: <code>Start</code>, <code>End</code>, <code>Consumption (kwh)</code>). Timestamps may include UTC offset.</div>
-    <div id="dataInfo" class="mb" style="margin-top:10px"></div>
-
-    <h3 style="margin-top:12px;font-size:1rem;color:var(--accent)">ESS (site)</h3>
-    <label>Capacity (kWh)</label>
-    <input type="number" id="essCapacity" step="0.1" value="0" />
-    <label style="margin-top:8px">Charge power (kW)</label>
-    <input type="number" id="essChargePower" step="0.1" value="0" />
-    <label style="margin-top:8px">Discharge power (kW)</label>
-    <input type="number" id="essDischargePower" step="0.1" value="0" />
-    <label style="margin-top:8px">Round-trip efficiency (%)</label>
-    <input type="number" id="essEfficiency" step="1" min="0" max="100" value="100" />
-    <div class="hint">Site property. Arbitrage: charges off-peak, discharges to meet demand. No grid export. Saved with the browser. Set charge power high enough to fill capacity in your off-peak window (Octopus Go: 5 h).</div>
-
-    <h2 style="margin-top:16px">2. Tariff configuration</h2>
-    <label>Default rate (£/kWh) if no band matches</label>
-    <input type="number" id="defaultRate" step="0.0001" value="0.25" />
-    <label style="margin-top:8px">Standing charge (£/day)</label>
-    <input type="number" id="standing" step="0.01" value="0.50" />
-
-    <label style="margin-top:10px">Tariffs (built-in + saved)</label>
-    <div id="tariffList" class="mb" style="margin-top:8px"></div>
-    <div class="row" style="margin-top:8px">
-      <input id="saveName" placeholder="Name for current tariff" />
-      <button class="secondary" id="saveAsNew" type="button">Save as new</button>
-      <button class="secondary" id="saveCurrent" type="button">Save (overwrite selected)</button>
+<main class="app">
+  <section class="panel active" id="panel-data">
+    <div class="card">
+      <h2>Upload data</h2>
+      <label>CSV file (hourly PTU)</label>
+      <input type="file" id="file" accept=".csv,text/csv" />
+      <div class="hint">Columns: <code>period_start_local</code>, <code>period_end_local</code>, <code>energy_kwh</code> (or Octopus export). Timestamps may include UTC offset.</div>
+      <div id="dataInfo" class="info"></div>
     </div>
-    <div class="row" style="margin-top:8px">
-      <button class="secondary" id="restoreBuiltins" type="button">Restore built-ins</button>
-      <button class="secondary" id="refreshTariffs" type="button">Refresh tariffs from file</button>
+    <div class="card">
+      <h2>ESS (site)</h2>
+      <div class="form-grid">
+        <label>Capacity (kWh)<input type="number" id="essCapacity" step="0.1" value="0" /></label>
+        <label>Charge power (kW)<input type="number" id="essChargePower" step="0.1" value="0" /></label>
+        <label>Discharge power (kW)<input type="number" id="essDischargePower" step="0.1" value="0" /></label>
+        <label>Round-trip efficiency (%)<input type="number" id="essEfficiency" step="1" min="0" max="100" value="100" /></label>
+      </div>
+      <div class="hint">Arbitrage: charges off-peak, discharges to meet demand. No grid export. Saved in browser.</div>
     </div>
-    <div class="muted" id="tariffSource" style="margin-top:6px"></div>
-    <div class="muted" id="currentTariffLabel" style="margin-top:6px"></div>
-    <div class="mb" style="margin-top:12px">
-      <div class="row" style="margin-bottom:8px">
-        <strong>Tariff bands</strong>
+  </section>
+
+  <section class="panel" id="panel-tariff">
+    <div class="card">
+      <h2>Tariff settings</h2>
+      <div class="form-grid">
+        <label>Default rate (£/kWh)<input type="number" id="defaultRate" step="0.0001" value="0.25" /></label>
+        <label>Standing charge (£/day)<input type="number" id="standing" step="0.01" value="0.50" /></label>
+      </div>
+      <label style="margin-top:12px">Tariffs (built-in + saved)</label>
+      <div id="tariffList" class="info"></div>
+      <div class="form-row">
+        <input id="saveName" placeholder="Name for current tariff" />
+        <button class="secondary" id="saveAsNew" type="button">Save as new</button>
+        <button class="secondary" id="saveCurrent" type="button">Save (overwrite)</button>
+      </div>
+      <div class="form-row">
+        <button class="secondary" id="restoreBuiltins" type="button">Restore built-ins</button>
+        <button class="secondary" id="refreshTariffs" type="button">Refresh from file</button>
+      </div>
+      <div class="muted" id="tariffSource"></div>
+      <div class="muted" id="currentTariffLabel"></div>
+    </div>
+    <div class="card">
+      <div class="card-head">
+        <h2>Tariff bands</h2>
         <button class="secondary" id="addBand" type="button">+ Add band</button>
       </div>
       <div id="bands"></div>
-      <div class="hint">Bands are evaluated top-to-bottom; first match wins. Empty days/months/time = "all". Overnight ranges (start &gt; end) wrap past midnight.</div>
+      <div class="hint">Bands evaluated top-to-bottom; first match wins. Empty days/months/time = "all". Overnight ranges wrap.</div>
     </div>
+  </section>
 
-    <div class="flex">
-      <button id="calc" type="button">Calculate</button>
-      <button class="secondary" id="export" type="button">Export monthly CSV</button>
+  <section class="panel" id="panel-results">
+    <div class="card">
+      <div class="form-row">
+        <button id="calc" type="button">Calculate</button>
+        <button class="secondary" id="export" type="button">Export monthly CSV</button>
+      </div>
+      <div id="summary" class="summary"></div>
     </div>
-  </div>
-
-  <div class="card">
-    <h2>3. Results</h2>
-    <div id="summary"></div>
-    <h3 style="margin:16px 0 8px;font-size:1rem;color:var(--accent)">Monthly breakdown</h3>
-    <div style="overflow-x:auto">
-      <table id="monthly"><thead><tr><th>Month</th><th>kWh</th><th>Cost £</th><th>Avg £/kWh</th><th>Standing £</th></tr></thead><tbody></tbody></table>
+    <div class="card">
+      <h2>Monthly breakdown</h2>
+      <div class="table-wrap"><table id="monthly"><thead><tr><th>Month</th><th>kWh</th><th>Cost £</th><th>Avg £/kWh</th><th>Standing £</th></tr></thead><tbody></tbody></table></div>
     </div>
-    <h3 style="margin:16px 0 8px;font-size:1rem;color:var(--accent)">Band breakdown (grid import)</h3>
-    <div style="overflow-x:auto">
-      <table id="bandsBreakdown"><thead><tr><th>Band</th><th>Rate £/kWh</th><th>With ESS</th><th>Without ESS</th></tr></thead><tbody></tbody></table>
+    <div class="card">
+      <h2>Band breakdown (grid import)</h2>
+      <div class="table-wrap"><table id="bandsBreakdown"><thead><tr><th>Band</th><th>Rate £/kWh</th><th>With ESS</th><th>Without ESS</th></tr></thead><tbody></tbody></table></div>
     </div>
-    <h3 style="margin:16px 0 8px;font-size:1rem;color:var(--accent)">ESS workings (per day)</h3>
-    <div style="overflow-x:auto">
-      <table id="essWorkings"><thead><tr><th>Day</th><th>Off-peak £/kWh</th><th>Charged kWh</th><th>Discharged kWh</th></tr></thead><tbody></tbody></table>
+    <div class="card">
+      <h2>ESS workings (per day)</h2>
+      <div class="table-wrap"><table id="essWorkings"><thead><tr><th>Day</th><th>Off-peak £/kWh</th><th>Charged kWh</th><th>Discharged kWh</th></tr></thead><tbody></tbody></table></div>
+      <button class="secondary" id="exportWorkings" type="button">Export workings CSV</button>
     </div>
-    <button id="exportWorkings" class="secondary" type="button">Export workings CSV</button>
-     <h3 style="margin:16px 0 8px;font-size:1rem;color:var(--accent)">Monthly by band</h3>
-     <div class="chart-toggles">
-       <button id="viewEnergy" class="secondary active" type="button">Energy (kWh)</button>
-       <button id="viewCost" class="secondary" type="button">Cost (£)</button>
-       <button id="essWith" class="secondary active" type="button">With ESS</button>
-       <button id="essWithout" class="secondary" type="button">Without ESS</button>
-     </div>
-     <div class="chart-wrap">
-       <div id="chart" class="chart"></div>
-       <div id="chartAxis" class="chart-axis"></div>
-       <div id="chartLegend" class="chart-legend"></div>
-     </div>
-  </div>
-</div>
+    <div class="card">
+      <h2>Monthly by band</h2>
+      <div class="chart-toggles">
+        <button id="viewEnergy" class="secondary active" type="button">Energy (kWh)</button>
+        <button id="viewCost" class="secondary" type="button">Cost (£)</button>
+        <button id="essWith" class="secondary active" type="button">With ESS</button>
+        <button id="essWithout" class="secondary" type="button">Without ESS</button>
+      </div>
+      <div class="chart-wrap">
+        <div id="chart" class="chart"></div>
+        <div id="chartAxis" class="chart-axis"></div>
+        <div id="chartLegend" class="chart-legend"></div>
+      </div>
+    </div>
+  </section>
+</main>
 
 <script>
 function parseCSV(text){
@@ -1000,6 +1036,21 @@ document.getElementById('export').addEventListener('click', ()=>{
   a.download = 'tariff_monthly_costs.csv';
   a.click();
 });
+
+
+
+// Tab switching
+(function(){
+  const tabs=document.getElementById('tabs');
+  if(!tabs) return;
+  tabs.addEventListener('click', (e)=>{
+    const btn=e.target.closest('.tab'); if(!btn) return;
+    const name=btn.dataset.tab;
+    document.querySelectorAll('.tab').forEach(t=>t.classList.toggle('active', t===btn));
+    document.querySelectorAll('.panel').forEach(p=>p.classList.toggle('active', p.id==='panel-'+name));
+  });
+})();
+
 </script>
 <p class="muted" style="margin-top:20px;text-align:center">Tariff data: tariffs.json · works offline</p>
 </body>
