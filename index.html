@@ -105,6 +105,16 @@
       <input type="file" id="file" accept=".csv,text/csv" />
       <div class="hint">Columns: <code>period_start_local</code>, <code>period_end_local</code>, <code>energy_kwh</code> (or Octopus export). Timestamps may include UTC offset.</div>
       <div id="dataInfo" class="info"></div>
+      <label style="margin-top:12px">Stored datasets</label>
+      <div class="form-row">
+        <select id="datasetSelect"></select>
+        <button class="secondary" id="loadDataset" type="button">Load</button>
+        <button class="danger" id="deleteDataset" type="button">Remove</button>
+      </div>
+      <div class="form-row" style="margin-top:8px">
+        <input id="datasetName" placeholder="Name for current dataset" />
+        <button class="secondary" id="saveDataset" type="button">Save current</button>
+      </div>
     </div>
     <div class="card">
       <h2>ESS (site)</h2>
@@ -226,6 +236,41 @@ function parseCSV(text){
 }
 
 let dataRows = [];
+
+function getStoredDatasets(){
+  try { return JSON.parse(localStorage.getItem('storedDatasets')||'[]'); } catch(e){ return []; }
+}
+function setStoredDatasets(list){ localStorage.setItem('storedDatasets', JSON.stringify(list)); }
+function serializeRows(rows){ return rows.map(r=>({start:r.start.toISOString(), end:r.end.toISOString(), energy:r.energy})); }
+function deserializeRows(rows){ return rows.map(r=>({start:new Date(r.start), end:new Date(r.end), energy:r.energy})); }
+function updateDataInfo(rows){
+  const first = rows.length? rows[0].start : null;
+  const last = rows.length? rows[rows.length-1].start : null;
+  const totalKwh = rows.reduce((a,r)=>a+r.energy,0);
+  const el = document.getElementById('dataInfo');
+  if(el) el.innerHTML =
+    `<span class="pill">${rows.length} PTUs</span> ` +
+    (first?`<span class="muted">${first.toLocaleString()} → ${last.toLocaleString()}</span>`:'') +
+    ` <span class="muted">Total ${totalKwh.toFixed(2)} kWh</span>`;
+}
+function refreshDatasetSelect(){
+  const sel = document.getElementById('datasetSelect');
+  if(!sel) return;
+  const list = getStoredDatasets();
+  sel.innerHTML = '';
+  for(const d of list){
+    const opt = document.createElement('option');
+    opt.value = d.name; opt.textContent = d.name;
+    sel.appendChild(opt);
+  }
+}
+function applyDataset(rows, label){
+  dataRows = rows;
+  updateDataInfo(rows);
+  renderTariffList();
+  if(label){ const inp=document.getElementById('datasetName'); if(inp) inp.value=label; }
+}
+
 const daysShort = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
 const monthNames = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 
@@ -497,6 +542,7 @@ updateCurrentLabel();
   if(el) el.addEventListener('change', persistEss);
   if(el) el.addEventListener('input', persistEss);
 });
+refreshDatasetSelect();
 
 document.getElementById('restoreBuiltins').addEventListener('click', restoreBuiltins);
 document.getElementById('refreshTariffs').addEventListener('click', async ()=>{
@@ -817,14 +863,51 @@ document.getElementById('file').addEventListener('change', async (e)=>{
     if(!end) end = new Date(d.getTime() + 60*60*1000);
     dataRows.push({start:d, end:end, energy:eKwh});
   }
-  const first = dataRows.length? dataRows[0].start : null;
-  const last = dataRows.length? dataRows[dataRows.length-1].start : null;
-  const totalKwh = dataRows.reduce((a,r)=>a+r.energy,0);
-  document.getElementById('dataInfo').innerHTML =
-    `<span class="pill">${dataRows.length} PTUs</span> ` +
-    (first?`<span class="muted">${first.toLocaleString()} → ${last.toLocaleString()}</span>`:'') +
-    ` <span class="muted">Total ${totalKwh.toFixed(2)} kWh</span>`;
-  renderTariffList();
+  // auto-store uploaded dataset
+  const name = (f.name||'Uploaded dataset').replace(/\.csv$/i,'');
+  const list = getStoredDatasets();
+  const idx = list.findIndex(d=>d.name===name);
+  const entry = {name, rows: serializeRows(dataRows), savedAt: new Date().toISOString()};
+  if(idx>=0) list[idx]=entry; else list.push(entry);
+  setStoredDatasets(list);
+  refreshDatasetSelect();
+  applyDataset(dataRows, name);
+  const sel = document.getElementById('datasetSelect');
+  if(sel) sel.value = name;
+});
+
+document.getElementById('loadDataset').addEventListener('click', ()=>{
+  const sel = document.getElementById('datasetSelect');
+  const name = sel ? sel.value : '';
+  const list = getStoredDatasets();
+  const d = list.find(x=>x.name===name);
+  if(!d){ alert('Select a dataset'); return; }
+  applyDataset(deserializeRows(d.rows), d.name);
+  const inp = document.getElementById('datasetName'); if(inp) inp.value = d.name;
+});
+
+document.getElementById('deleteDataset').addEventListener('click', ()=>{
+  const sel = document.getElementById('datasetSelect');
+  const name = sel ? sel.value : '';
+  if(!name){ alert('Select a dataset'); return; }
+  if(!confirm('Remove stored dataset "'+name+'"?')) return;
+  const list = getStoredDatasets().filter(d=>d.name!==name);
+  setStoredDatasets(list);
+  refreshDatasetSelect();
+  // if current data came from deleted dataset, clear? keep dataRows
+});
+
+document.getElementById('saveDataset').addEventListener('click', ()=>{
+  const inp = document.getElementById('datasetName');
+  const name = (inp && inp.value.trim()) ? inp.value.trim() : 'Dataset';
+  if(!dataRows.length){ alert('No data to save'); return; }
+  const list = getStoredDatasets();
+  const idx = list.findIndex(d=>d.name===name);
+  const entry = {name, rows: serializeRows(dataRows), savedAt: new Date().toISOString()};
+  if(idx>=0) list[idx]=entry; else list.push(entry);
+  setStoredDatasets(list);
+  refreshDatasetSelect();
+  const sel = document.getElementById('datasetSelect'); if(sel) sel.value = name;
 });
 
 function runCalculation(){
