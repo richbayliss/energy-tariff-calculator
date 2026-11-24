@@ -40,6 +40,18 @@
   .mb{margin-bottom:12px}
   input[type=file]{padding:6px}
   .hint{font-size:.78rem;color:var(--muted);margin-top:4px}
+   .chart-wrap{margin-top:12px}
+   .chart-toggles{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px}
+   .chart-toggles button{padding:4px 10px;font-size:.75rem}
+   .chart-toggles button.active{background:var(--accent);color:#0f172a}
+   .chart{display:flex;align-items:flex-end;gap:4px;height:200px;border-bottom:1px solid #334155;padding:0 2px}
+   .chart-col{flex:1;display:flex;flex-direction:column-reverse;min-width:0;height:100%;justify-content:flex-start}
+   .chart-seg{width:100%}
+   .chart-axis{display:flex;gap:4px;margin-top:4px}
+   .chart-axis span{flex:1;text-align:center;font-size:.7rem;color:var(--muted)}
+   .chart-legend{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px;font-size:.75rem}
+   .chart-legend span{display:inline-flex;align-items:center;gap:4px}
+   .chart-legend i{display:inline-block;width:10px;height:10px;border-radius:2px}
 </style>
 </head>
 <body>
@@ -78,7 +90,9 @@
     </div>
     <div class="row" style="margin-top:8px">
       <button class="secondary" id="restoreBuiltins" type="button">Restore built-ins</button>
+      <button class="secondary" id="refreshTariffs" type="button">Refresh tariffs from file</button>
     </div>
+    <div class="muted" id="tariffSource" style="margin-top:6px"></div>
     <div class="muted" id="currentTariffLabel" style="margin-top:6px"></div>
     <div class="mb" style="margin-top:12px">
       <div class="row" style="margin-bottom:8px">
@@ -106,6 +120,18 @@
     <div style="overflow-x:auto">
       <table id="bandsBreakdown"><thead><tr><th>Band</th><th>Rate £/kWh</th><th>With ESS</th><th>Without ESS</th></tr></thead><tbody></tbody></table>
     </div>
+     <h3 style="margin:16px 0 8px;font-size:1rem;color:var(--accent)">Monthly by band</h3>
+     <div class="chart-toggles">
+       <button id="viewEnergy" class="secondary active" type="button">Energy (kWh)</button>
+       <button id="viewCost" class="secondary" type="button">Cost (£)</button>
+       <button id="essWith" class="secondary active" type="button">With ESS</button>
+       <button id="essWithout" class="secondary" type="button">Without ESS</button>
+     </div>
+     <div class="chart-wrap">
+       <div id="chart" class="chart"></div>
+       <div id="chartAxis" class="chart-axis"></div>
+       <div id="chartLegend" class="chart-legend"></div>
+     </div>
   </div>
 </div>
 
@@ -225,6 +251,43 @@ function getSavedList(){
 }
 function setSavedList(list){
   localStorage.setItem('savedTariffs', JSON.stringify(list));
+}
+
+function mergeBuiltins(builtins){
+  if(!Array.isArray(builtins) || !builtins.length) return;
+  const list = getSavedList();
+  for(const b of builtins){
+    if(!b || !b.name || !b.config) continue;
+    const i = list.findIndex(x=>x.name===b.name);
+    if(i>=0) list[i].config = b.config;
+    else list.push({name:b.name, config:b.config});
+  }
+  setSavedList(list);
+}
+
+async function loadTariffsFromSource(){
+  const status = document.getElementById('tariffSource');
+  try {
+    const res = await fetch('./tariffs.json', {cache:'no-cache'});
+    if(!res.ok) throw new Error('HTTP '+res.status);
+    const data = await res.json();
+    const list = Array.isArray(data) ? data : (data.tariffs || []);
+    mergeBuiltins(list);
+    if(status) status.textContent = 'Tariffs loaded from tariffs.json ('+list.length+' built-in).';
+  } catch(e){
+    if(!getSavedList().length){
+      const fallback = [
+        {name:'Flat 24/7', config: presets.flat},
+        {name:'Economy 7', config: presets['economy7']},
+        {name:'Octopus Go', config: presets['octopus-go']},
+        {name:'Peak/Off-peak', config: presets['peak-avoid']},
+      ];
+      mergeBuiltins(fallback);
+    }
+    if(status) status.textContent = 'Could not fetch tariffs.json; using cached/local tariffs.';
+  }
+  renderTariffList();
+  updateCurrentLabel();
 }
 
 function seedBuiltins(){
@@ -350,7 +413,7 @@ function restoreBuiltins(){
 }
 
 seedBuiltins();
-renderTariffList();
+loadTariffsFromSource();
 updateCurrentLabel();
 
 // Load persisted ESS settings
@@ -371,6 +434,11 @@ updateCurrentLabel();
 });
 
 document.getElementById('restoreBuiltins').addEventListener('click', restoreBuiltins);
+document.getElementById('refreshTariffs').addEventListener('click', async ()=>{
+  const el = document.getElementById('tariffSource');
+  if(el) el.textContent = 'Refreshing...';
+  await loadTariffsFromSource();
+});
 document.getElementById('saveAsNew').addEventListener('click', saveAsNew);
 document.getElementById('saveCurrent').addEventListener('click', saveOverwrite);
 
@@ -556,18 +624,29 @@ function simulate(cfg){
   }
   const bandBreakdown = Object.values(bandMap).sort((a,b)=>b.rate-a.rate);
 
+  // Unique band names in first-seen order
+  const bandNames = [];
+  const seenBands = new Set();
+  for(const s of slots){ if(!seenBands.has(s.bandName)){ seenBands.add(s.bandName); bandNames.push(s.bandName); } }
+
   // Aggregate
   const months = {};
   for(const k of Object.keys(monthDays)){
-    months[k] = {kwh:0, cost:0, gridKwh:0, days:new Set(monthDays[k]), standing:0};
+    months[k] = {kwh:0, cost:0, gridKwh:0, days:new Set(monthDays[k]), standing:0,
+      withEssKwh:{}, withEssCost:{}, withoutEssKwh:{}, withoutEssCost:{}};
   }
   for(let i=0;i<n;i++){
     const s = slots[i];
     const key = s.monthKey;
-    if(!months[key]) months[key]={kwh:0,cost:0,gridKwh:0,days:new Set(),standing:0};
+    if(!months[key]) months[key]={kwh:0,cost:0,gridKwh:0,days:new Set(),standing:0,withEssKwh:{},withEssCost:{},withoutEssKwh:{},withoutEssCost:{}};
     months[key].kwh += s.load;
     months[key].gridKwh += gridImport[i];
     months[key].cost += gridImport[i]*s.rate;
+    const b = s.bandName;
+    months[key].withEssKwh[b] = (months[key].withEssKwh[b]||0) + gridImport[i];
+    months[key].withEssCost[b] = (months[key].withEssCost[b]||0) + gridImport[i]*s.rate;
+    months[key].withoutEssKwh[b] = (months[key].withoutEssKwh[b]||0) + baselineGrid[i];
+    months[key].withoutEssCost[b] = (months[key].withoutEssCost[b]||0) + baselineGrid[i]*s.rate;
   }
 
   let standingTotal = 0;
@@ -596,7 +675,7 @@ function simulate(cfg){
 
   return {
     months, totalCost, totalKwh, totalGridKwh, baselineCost, standingTotal,
-    totalCharged, totalDischarged, bandBreakdown,
+    totalCharged, totalDischarged, bandBreakdown, bandNames,
     monthKeys, daysSet: allDays
   };
 }
@@ -685,8 +764,135 @@ function runCalculation(){
 
   window._lastMonths = months;
   window._lastMonthKeys = monthKeys;
+  window._lastResult = res;
+  renderChart();
 }
+let chartView = 'energy'; // 'energy' | 'cost'
+let chartEss = 'with'; // 'with' | 'without'
+
+const CHART_COLORS = ['#38bdf8','#fbbf24','#4ade80','#f472b6','#a78bfa','#fb923c','#34d399','#60a5fa'];
+
+function bandColor(name, bandNames){
+  const idx = bandNames.indexOf(name);
+  return CHART_COLORS[(idx>=0?idx:0) % CHART_COLORS.length];
+}
+
+function renderChart(){
+  const res = window._lastResult;
+  const chart = document.getElementById('chart');
+  const axis = document.getElementById('chartAxis');
+  const legend = document.getElementById('chartLegend');
+  if(!res){ chart.innerHTML=''; axis.innerHTML=''; legend.innerHTML=''; return; }
+  const monthKeys = res.monthKeys;
+  const months = res.months;
+  const bandNames = res.bandNames || [];
+  const withEss = chartEss === 'with';
+
+  // Determine per-month per-band values and totals
+  const monthData = monthKeys.map(k=>{
+    const m = months[k];
+    const srcKwh = withEss ? m.withEssKwh : m.withoutEssKwh;
+    const srcCost = withEss ? m.withEssCost : m.withoutEssCost;
+    const vals = bandNames.map(b => chartView==='energy' ? (srcKwh[b]||0) : (srcCost[b]||0));
+    const total = vals.reduce((a,v)=>a+v,0);
+    const standing = (chartView==='cost') ? (m.standing||0) : 0;
+    return {k, vals, total: total+standing, standing};
+  });
+  const maxTotal = Math.max(1, ...monthData.map(d=>d.total));
+
+  // Render bars
+  chart.innerHTML = '';
+  for(const d of monthData){
+    const col = document.createElement('div');
+    col.className = 'chart-col';
+    // segments bottom->top: standing (cost only) first, then bands in bandNames order
+    const segs = [];
+    if(chartView==='cost' && d.standing>0){
+      segs.push({name:'Standing', value:d.standing, color:'#64748b'});
+    }
+    bandNames.forEach((b,i)=>{
+      segs.push({name:b, value:d.vals[i], color:bandColor(b, bandNames)});
+    });
+    // render bottom-first: column-reverse, so push standing first then bands? 
+    // We want standing at bottom. column-reverse renders DOM order bottom->top. So DOM order = bottom to top.
+    // Put standing first (bottom), then bands above.
+    for(const seg of segs){
+      const div = document.createElement('div');
+      div.className = 'chart-seg';
+      const pct = (seg.value / maxTotal) * 100;
+      div.style.height = pct + '%';
+      div.style.background = seg.color;
+      div.title = seg.name + ': ' + seg.value.toFixed(2);
+      col.appendChild(div);
+    }
+    chart.appendChild(col);
+  }
+
+  // Axis labels
+  axis.innerHTML = '';
+  for(const k of monthKeys){
+    const sp = document.createElement('span');
+    sp.textContent = k.slice(5); // MM
+    axis.appendChild(sp);
+  }
+
+  // Legend
+  legend.innerHTML = '';
+  const legendItems = [];
+  if(chartView==='cost'){
+    legendItems.push({name:'Standing', color:'#64748b'});
+  }
+  bandNames.forEach(b=>legendItems.push({name:b, color:bandColor(b, bandNames)}));
+  for(const it of legendItems){
+    const sp = document.createElement('span');
+    sp.innerHTML = '<i style="background:'+it.color+'"></i>'+it.name;
+    legend.appendChild(sp);
+  }
+}
+
+function setToggle(btnId, active){
+  const btn = document.getElementById(btnId);
+  if(!btn) return;
+  if(active) btn.classList.add('active'); else btn.classList.remove('active');
+}
+
+document.getElementById('viewEnergy').addEventListener('click', ()=>{
+  chartView='energy';
+  setToggle('viewEnergy', true); setToggle('viewCost', false);
+  renderChart();
+});
+document.getElementById('viewCost').addEventListener('click', ()=>{
+  chartView='cost';
+  setToggle('viewCost', true); setToggle('viewEnergy', false);
+  renderChart();
+});
+document.getElementById('essWith').addEventListener('click', ()=>{
+  chartEss='with';
+  setToggle('essWith', true); setToggle('essWithout', false);
+  renderChart();
+});
+document.getElementById('essWithout').addEventListener('click', ()=>{
+  chartEss='without';
+  setToggle('essWithout', true); setToggle('essWith', false);
+  renderChart();
+});
+
 document.getElementById('calc').addEventListener('click', runCalculation);
+
+// Service worker
+if('serviceWorker' in navigator){
+  window.addEventListener('load', ()=>{
+    navigator.serviceWorker.register('./sw.js', {scope:'./'}).then((reg)=>{
+      setInterval(()=>reg.update(), 60*60*1000);
+    }).catch(()=>{});
+  });
+  let reloaded = false;
+  navigator.serviceWorker.addEventListener('controllerchange', ()=>{
+    if(reloaded) return;
+    reloaded = true;
+    window.location.reload();
+  });
+}
 
 document.getElementById('export').addEventListener('click', ()=>{
   if(!window._lastMonths){ alert('Calculate first'); return; }

@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "updated": "2026-11-24",
+  "tariffs": [
+    { "name": "Flat 24/7", "config": { "defaultRate": 0.25, "standing": 0.5, "bands": [] } },
+    { "name": "Economy 7", "config": { "defaultRate": 0.33, "standing": 0.5, "bands": [{ "name": "Night (off-peak)", "rate": 0.15, "start": "00:00", "end": "07:00", "days": [], "months": [] }] } },
+    { "name": "Octopus Go", "config": { "defaultRate": 0.33, "standing": 0.5, "bands": [{ "name": "Go off-peak", "rate": 0.095, "start": "00:30", "end": "05:30", "days": [], "months": [] }] } },
+    { "name": "Peak/Off-peak", "config": { "defaultRate": 0.25, "standing": 0.5, "bands": [{ "name": "Off-peak", "rate": 0.07, "start": "00:00", "end": "07:00", "days": [], "months": [] }, { "name": "Peak", "rate": 0.4, "start": "16:00", "end": "19:00", "days": [1, 2, 3, 4, 5], "months": [] }] } }
+  ]
+}
