@@ -704,13 +704,19 @@ function simulate(cfg){
   const dailyMap = {};
   for(let i=0;i<n;i++){
     const dk = slots[i].dayKey;
-    if(!dailyMap[dk]) dailyMap[dk] = {day:dk, monthKey:slots[i].monthKey, load:0, withEssKwh:0, withoutEssKwh:0, withEssCost:0, withoutEssCost:0};
+    if(!dailyMap[dk]) dailyMap[dk] = {day:dk, monthKey:slots[i].monthKey, load:0, withEssKwh:0, withoutEssKwh:0, withEssCost:0, withoutEssCost:0,
+      withEssKwhByBand:{}, withoutEssKwhByBand:{}, withEssCostByBand:{}, withoutEssCostByBand:{}};
     const dd = dailyMap[dk];
     dd.load += slots[i].load;
     dd.withEssKwh += gridImport[i];
     dd.withoutEssKwh += baselineGrid[i];
     dd.withEssCost += gridImport[i]*slots[i].rate;
     dd.withoutEssCost += baselineGrid[i]*slots[i].rate;
+    const b = slots[i].bandName;
+    dd.withEssKwhByBand[b] = (dd.withEssKwhByBand[b]||0) + gridImport[i];
+    dd.withoutEssKwhByBand[b] = (dd.withoutEssKwhByBand[b]||0) + baselineGrid[i];
+    dd.withEssCostByBand[b] = (dd.withEssCostByBand[b]||0) + gridImport[i]*slots[i].rate;
+    dd.withoutEssCostByBand[b] = (dd.withoutEssCostByBand[b]||0) + baselineGrid[i]*slots[i].rate;
   }
   const daily = Object.keys(dailyMap).sort().map(dk=>{
     const dd = dailyMap[dk];
@@ -1033,43 +1039,65 @@ function renderDailyChart(){
   const sel=document.getElementById('dailyMonth');
   const month=sel? sel.value : null;
   const days=res.daily.filter(d=>!month || d.monthKey===month);
-  const valsWith=days.map(d=>{
-    if(chartView==='energy') return d.withEssKwh;
-    return d.withEssCost + (d.standing||0);
-  });
-  const valsWithout=days.map(d=>{
-    if(chartView==='energy') return d.withoutEssKwh;
-    return d.withoutEssCost + (d.standing||0);
-  });
-  const max=Math.max(1,...valsWith,...valsWithout);
+  const bandNames = res.bandNames || [];
+  const otherBands = bandNames.filter(b=>!isStandardBand(b))
+    .sort((a,b)=>bandRate(b,res)-bandRate(a,res));
+
+  function seriesSegments(d, withEss){
+    const segs=[];
+    if(chartView==='cost' && (d.standing||0)>0){
+      segs.push({name:'Standing', value:d.standing, color:'#64748b'});
+    }
+    const byBandKwh = withEss ? (d.withEssKwhByBand||{}) : (d.withoutEssKwhByBand||{});
+    const byBandCost = withEss ? (d.withEssCostByBand||{}) : (d.withoutEssCostByBand||{});
+    if(bandNames.includes('Default')){
+      const v = chartView==='energy' ? (byBandKwh['Default']||0) : (byBandCost['Default']||0);
+      segs.push({name:'Default', value:v, color:'#fbbf24'});
+    }
+    for(const b of otherBands){
+      const v = chartView==='energy' ? (byBandKwh[b]||0) : (byBandCost[b]||0);
+      segs.push({name:b, value:v, color:chartColor(b, otherBands)});
+    }
+    return segs;
+  }
+
+  function seriesTotal(d, withEss){
+    if(chartView==='energy') return withEss? d.withEssKwh : d.withoutEssKwh;
+    return (withEss? d.withEssCost : d.withoutEssCost) + (d.standing||0);
+  }
+
+  const totalsWith=days.map(d=>seriesTotal(d,true));
+  const totalsWithout=days.map(d=>seriesTotal(d,false));
+  const max=Math.max(1,...totalsWith,...totalsWithout);
   chart.innerHTML='';
   for(let i=0;i<days.length;i++){
     const col=document.createElement('div');
     col.className='chart-col chart-col-group';
-    // with
     const wrap=document.createElement('div');
     wrap.className='bar-group';
-    const b1=document.createElement('div');
-    b1.className='chart-seg';
-    b1.style.height=(valsWith[i]/max*100)+'%';
-    b1.style.background='#38bdf8';
-    b1.title = days[i].day + ' with ESS: ' + valsWith[i].toFixed(2);
-    const l1=document.createElement('div');
-    l1.className='bar-label';
-    l1.textContent=valsWith[i].toFixed(1);
-    b1.appendChild(l1);
-    // without
-    const b2=document.createElement('div');
-    b2.className='chart-seg';
-    b2.style.height=(valsWithout[i]/max*100)+'%';
-    b2.style.background='#94a3b8';
-    b2.title = days[i].day + ' without ESS: ' + valsWithout[i].toFixed(2);
-    const l2=document.createElement('div');
-    l2.className='bar-label';
-    l2.textContent=valsWithout[i].toFixed(1);
-    b2.appendChild(l2);
-    wrap.appendChild(b1);
-    wrap.appendChild(b2);
+    for(const withEss of [true,false]){
+      const total = withEss? totalsWith[i] : totalsWithout[i];
+      const bar=document.createElement('div');
+      bar.className='chart-seg chart-seg-stack';
+      bar.style.height=(total/max*100)+'%';
+      bar.style.background='transparent';
+      bar.style.display='flex';
+      bar.style.flexDirection='column-reverse';
+      const segs=seriesSegments(days[i], withEss);
+      for(const seg of segs){
+        const segDiv=document.createElement('div');
+        const pct = total>0 ? (seg.value/total*100) : 0;
+        segDiv.style.height = pct+'%';
+        segDiv.style.background = seg.color;
+        segDiv.title = days[i].day + ' ' + seg.name + ': ' + seg.value.toFixed(2);
+        bar.appendChild(segDiv);
+      }
+      const label=document.createElement('div');
+      label.className='bar-label';
+      label.textContent=total.toFixed(1);
+      bar.appendChild(label);
+      wrap.appendChild(bar);
+    }
     col.appendChild(wrap);
     chart.appendChild(col);
   }
@@ -1091,6 +1119,7 @@ function renderDailyChart(){
     legend.appendChild(sp2);
   }
 }
+
 
 document.getElementById('essWith').addEventListener('click', ()=>{
   chartEss='with';
