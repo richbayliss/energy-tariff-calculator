@@ -175,6 +175,17 @@
         <div id="chartLegend" class="chart-legend"></div>
       </div>
     </div>
+    <div class="card">
+      <h2>Daily breakdown</h2>
+      <div class="form-row">
+        <label>Month<select id="dailyMonth"></select></label>
+      </div>
+      <div class="chart-wrap">
+        <div id="dailyChart" class="chart"></div>
+        <div id="dailyAxis" class="chart-axis"></div>
+        <div id="dailyLegend" class="chart-legend"></div>
+      </div>
+    </div>
   </section>
 </main>
 
@@ -686,6 +697,24 @@ function simulate(cfg){
   const seenBands = new Set();
   for(const s of slots){ if(!seenBands.has(s.bandName)){ seenBands.add(s.bandName); bandNames.push(s.bandName); } }
 
+  // Daily aggregation
+  const dailyMap = {};
+  for(let i=0;i<n;i++){
+    const dk = slots[i].dayKey;
+    if(!dailyMap[dk]) dailyMap[dk] = {day:dk, monthKey:slots[i].monthKey, load:0, withEssKwh:0, withoutEssKwh:0, withEssCost:0, withoutEssCost:0};
+    const dd = dailyMap[dk];
+    dd.load += slots[i].load;
+    dd.withEssKwh += gridImport[i];
+    dd.withoutEssKwh += baselineGrid[i];
+    dd.withEssCost += gridImport[i]*slots[i].rate;
+    dd.withoutEssCost += baselineGrid[i]*slots[i].rate;
+  }
+  const daily = Object.keys(dailyMap).sort().map(dk=>{
+    const dd = dailyMap[dk];
+    dd.standing = standing;
+    return dd;
+  });
+
   // Aggregate
   const months = {};
   for(const k of Object.keys(monthDays)){
@@ -739,7 +768,7 @@ function simulate(cfg){
   return {
     months, totalCost, totalKwh, totalGridKwh, baselineCost, standingTotal,
     totalCharged, totalDischarged, bandBreakdown, bandNames,
-    monthKeys, daysSet: allDays, slotWork
+    monthKeys, daysSet: allDays, slotWork, daily
   };
 }
 
@@ -847,7 +876,9 @@ function runCalculation(){
   window._lastMonthKeys = monthKeys;
   window._lastResult = res;
   window._lastSlotWork = res.slotWork||[];
+  populateDailyMonth();
   renderChart();
+  renderDailyChart();
 }
 let chartView = 'energy'; // 'energy' | 'cost'
 let chartEss = 'with'; // 'with' | 'without'
@@ -969,22 +1000,84 @@ document.getElementById('viewEnergy').addEventListener('click', ()=>{
   chartView='energy';
   setToggle('viewEnergy', true); setToggle('viewCost', false);
   renderChart();
+  renderDailyChart();
 });
 document.getElementById('viewCost').addEventListener('click', ()=>{
   chartView='cost';
   setToggle('viewCost', true); setToggle('viewEnergy', false);
   renderChart();
+  renderDailyChart();
 });
+function populateDailyMonth(){
+  const sel=document.getElementById('dailyMonth');
+  if(!sel) return;
+  const res=window._lastResult;
+  sel.innerHTML='';
+  if(!res || !res.daily) return;
+  const months=[...new Set(res.daily.map(d=>d.monthKey))].sort();
+  for(const m of months){
+    const opt=document.createElement('option'); opt.value=m; opt.textContent=m; sel.appendChild(opt);
+  }
+  if(months.length) sel.value=months[months.length-1];
+}
+
+function renderDailyChart(){
+  const res=window._lastResult;
+  const chart=document.getElementById('dailyChart');
+  const axis=document.getElementById('dailyAxis');
+  const legend=document.getElementById('dailyLegend');
+  if(!res || !res.daily || !chart) return;
+  const sel=document.getElementById('dailyMonth');
+  const month=sel? sel.value : null;
+  const days=res.daily.filter(d=>!month || d.monthKey===month);
+  const withEss = chartEss==='with';
+  const vals=days.map(d=>{
+    if(chartView==='energy') return withEss? d.withEssKwh : d.withoutEssKwh;
+    return (withEss? d.withEssCost : d.withoutEssCost) + (d.standing||0);
+  });
+  const max=Math.max(1,...vals);
+  chart.innerHTML='';
+  for(let i=0;i<days.length;i++){
+    const col=document.createElement('div');
+    col.className='chart-col';
+    const div=document.createElement('div');
+    div.className='chart-seg';
+    div.style.height=(vals[i]/max*100)+'%';
+    div.style.background = withEss? '#38bdf8' : '#94a3b8';
+    div.title = days[i].day + ': ' + vals[i].toFixed(2);
+    col.appendChild(div);
+    chart.appendChild(col);
+  }
+  if(axis){
+    axis.innerHTML='';
+    for(const d of days){
+      const sp=document.createElement('span');
+      sp.textContent=d.day.slice(8);
+      axis.appendChild(sp);
+    }
+  }
+  if(legend){
+    legend.innerHTML='';
+    const sp=document.createElement('span');
+    sp.innerHTML='<i style="background:'+(withEss?'#38bdf8':'#94a3b8')+'"></i>'+(withEss?'With ESS':'Without ESS');
+    legend.appendChild(sp);
+  }
+}
+
 document.getElementById('essWith').addEventListener('click', ()=>{
   chartEss='with';
   setToggle('essWith', true); setToggle('essWithout', false);
   renderChart();
+  renderDailyChart();
 });
 document.getElementById('essWithout').addEventListener('click', ()=>{
   chartEss='without';
   setToggle('essWithout', true); setToggle('essWith', false);
   renderChart();
+  renderDailyChart();
 });
+const dailyMonthSel=document.getElementById('dailyMonth');
+if(dailyMonthSel) dailyMonthSel.addEventListener('change', renderDailyChart);
 document.getElementById('exportWorkings').addEventListener('click', ()=>{
   const rows = window._lastSlotWork||[];
   if(!rows.length){ alert('Run a calculation first'); return; }
