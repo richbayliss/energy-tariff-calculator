@@ -1,10 +1,55 @@
 {
   "version": 1,
-  "updated": "2026-11-24",
+  "updated": "2026-11-25",
   "tariffs": [
-    { "name": "Flat 24/7", "config": { "defaultRate": 0.25, "standing": 0.5, "bands": [] } },
-    { "name": "Economy 7", "config": { "defaultRate": 0.33, "standing": 0.5, "bands": [{ "name": "Night (off-peak)", "rate": 0.15, "start": "00:00", "end": "07:00", "days": [], "months": [] }] } },
-    { "name": "Octopus Go", "config": { "defaultRate": 0.33, "standing": 0.5, "bands": [{ "name": "Go off-peak", "rate": 0.095, "start": "00:30", "end": "05:30", "days": [], "months": [] }] } },
-    { "name": "Peak/Off-peak", "config": { "defaultRate": 0.25, "standing": 0.5, "bands": [{ "name": "Off-peak", "rate": 0.07, "start": "00:00", "end": "07:00", "days": [], "months": [] }, { "name": "Peak", "rate": 0.4, "start": "16:00", "end": "19:00", "days": [1, 2, 3, 4, 5], "months": [] }] } }
+    { "name": "UK Price Cap (max)", "config": { "defaultRate": 0.25355, "standing": 0.51452, "bands": [] } },
+
+    { "name": "Octopus Flexible", "config": { "defaultRate": 0.253552, "standing": 0.502041, "bands": [] } },
+    { "name": "Octopus Flexible (Economy 7)", "config": { "defaultRate": 0.31348, "standing": 0.496489, "bands": [{ "name": "Night (off-peak)", "rate": 0.139743, "start": "00:30", "end": "07:30", "days": [], "months": [] }] } },
+
+    { "name": "Octopus Go", "config": { "defaultRate": 0.330298, "standing": 0.507455, "bands": [{ "name": "Go off-peak", "rate": 0.094, "start": "00:30", "end": "05:30", "days": [], "months": [] }] } },
+    { "name": "Octopus Go 12M Fixed", "config": { "defaultRate": 0.362868, "standing": 0.5102, "bands": [{ "name": "Go off-peak", "rate": 0.094, "start": "00:30", "end": "05:30", "days": [], "months": [] }] } },
+
+    { "name": "Intelligent Octopus Go", "config": { "defaultRate": 0.325278, "standing": 0.5102, "bands": [{ "name": "IOG off-peak", "rate": 0.099, "start": "23:30", "end": "05:30", "days": [], "months": [] }] } },
+    { "name": "Intelligent Octopus Go Max", "config": { "defaultRate": 0.364417, "standing": 0.5102, "bands": [{ "name": "IOG off-peak", "rate": 0.065, "start": "23:30", "end": "05:30", "days": [], "months": [] }] } },
+    { "name": "Intelligent Octopus Go 12M Fixed", "config": { "defaultRate": 0.381785, "standing": 0.5102, "bands": [{ "name": "IOG off-peak", "rate": 0.079, "start": "23:30", "end": "05:30", "days": [], "months": [] }] } },
+    { "name": "Intelligent Octopus Go 12M Fixed (EV Saver)", "config": { "defaultRate": 0.381785, "standing": 0.5102, "bands": [{ "name": "IOG off-peak", "rate": 0.069, "start": "23:30", "end": "05:30", "days": [], "months": [] }] } },
+
+    { "name": "Octopus Cosy", "config": { "defaultRate": 0.27453, "standing": 0.507455, "bands": [
+      { "name": "Cosy off-peak", "rate": 0.134629, "start": "04:00", "end": "07:00", "days": [], "months": [] },
+      { "name": "Cosy off-peak", "rate": 0.134629, "start": "13:00", "end": "16:00", "days": [], "months": [] },
+      { "name": "Cosy off-peak", "rate": 0.134629, "start": "22:00", "end": "00:00", "days": [], "months": [] },
+      { "name": "Cosy peak", "rate": 0.411795, "start": "16:00", "end": "19:00", "days": [], "months": [] }
+    ] } },
+    { "name": "Octopus Cosy 12M Fixed", "config": { "defaultRate": 0.312963, "standing": 0.51191, "bands": [
+      { "name": "Cosy off-peak", "rate": 0.153584, "start": "04:00", "end": "07:00", "days": [], "months": [] },
+      { "name": "Cosy off-peak", "rate": 0.153584, "start": "13:00", "end": "16:00", "days": [], "months": [] },
+      { "name": "Cosy off-peak", "rate": 0.153584, "start": "22:00", "end": "00:00", "days": [], "months": [] },
+      { "name": "Cosy peak", "rate": 0.469444, "start": "16:00", "end": "19:00", "days": [], "months": [] }
+    ] } },
+
+    { "name": "Octopus Flux", "config": { "defaultRate": 0.255265, "standing": 0.507455, "bands": [
+      { "name": "Flux off-peak", "rate": 0.154122, "start": "02:00", "end": "05:00", "days": [], "months": [] },
+      { "name": "Flux peak", "rate": 0.356407, "start": "16:00", "end": "19:00", "days": [], "months": [] }
+    ] } },
+    { "name": "Intelligent Octopus Flux", "config": { "defaultRate": 0.231183, "standing": 0.507455, "bands": [
+      { "name": "Flux peak", "rate": 0.288979, "start": "16:00", "end": "19:00", "days": [], "months": [] }
+    ] } },
+
+    { "name": "Octopus Snug", "config": { "defaultRate": 0.265414, "standing": 0.507455, "bands": [{ "name": "Snug off-peak", "rate": 0.095, "start": "00:30", "end": "06:30", "days": [], "months": [] }] } },
+
+    { "name": "Octopus 12M Fixed", "config": { "defaultRate": 0.334692, "standing": 0.496489, "bands": [{ "name": "Night (off-peak)", "rate": 0.149199, "start": "00:30", "end": "07:30", "days": [], "months": [] }] } },
+    { "name": "Octopus 18M Fixed", "config": { "defaultRate": 0.321543, "standing": 0.496489, "bands": [{ "name": "Night (off-peak)", "rate": 0.143337, "start": "00:30", "end": "07:30", "days": [], "months": [] }] } },
+
+    { "name": "Agile Octopus (variable, approx)", "config": { "defaultRate": 0.3106, "standing": 0.522352, "bands": [] } },
+
+    { "name": "EDF Standard Variable", "config": { "defaultRate": 0.25355, "standing": 0.51452, "bands": [] } },
+    { "name": "EDF Simply Fixed", "config": { "defaultRate": 0.3181, "standing": 0.5145, "bands": [] } },
+
+    { "name": "OVO Simpler Energy", "config": { "defaultRate": 0.2536, "standing": 0.5145, "bands": [] } },
+    { "name": "OVO 1 Year Fixed", "config": { "defaultRate": 0.2904, "standing": 0.5795, "bands": [] } },
+
+    { "name": "E.On Next Flex", "config": { "defaultRate": 0.25355, "standing": 0.51452, "bands": [] } },
+    { "name": "E.On Next Fixed 12m", "config": { "defaultRate": 0.2880, "standing": 0.6005, "bands": [] } }
   ]
 }

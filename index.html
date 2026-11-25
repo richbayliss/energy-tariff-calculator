@@ -348,12 +348,7 @@ function makeBand(b){
   document.getElementById('bands').appendChild(div);
 }
 
-const presets = {
-  'flat': {defaultRate:0.25, standing:0.50, bands:[]},
-  'economy7': {defaultRate:0.33, standing:0.50, bands:[{name:'Night (off-peak)',rate:0.15,start:'00:00',end:'07:00',days:[],months:[]}]},
-  'octopus-go': {defaultRate:0.33, standing:0.50, bands:[{name:'Go off-peak',rate:0.095,start:'00:30',end:'05:30',days:[],months:[]}]},
-  'peak-avoid': {defaultRate:0.25, standing:0.50, bands:[{name:'Off-peak',rate:0.07,start:'00:00',end:'07:00',days:[],months:[]},{name:'Peak',rate:0.40,start:'16:00',end:'19:00',days:[1,2,3,4,5],months:[]}]},
-};
+const presets = {};
 
 function minToTime(m){
   if(m==null) return '';
@@ -404,16 +399,12 @@ async function loadTariffsFromSource(){
     const data = await res.json();
     const list = Array.isArray(data) ? data : (data.tariffs || []);
     mergeBuiltins(list);
+    const legacy = ['Flat 24/7','Economy 7','Octopus Go','Peak/Off-peak'];
+    setSavedList(getSavedList().filter(x => !legacy.includes(x.name)));
     if(status) status.textContent = 'Tariffs loaded from tariffs.json ('+list.length+' built-in).';
   } catch(e){
     if(!getSavedList().length){
-      const fallback = [
-        {name:'Flat 24/7', config: presets.flat},
-        {name:'Economy 7', config: presets['economy7']},
-        {name:'Octopus Go', config: presets['octopus-go']},
-        {name:'Peak/Off-peak', config: presets['peak-avoid']},
-      ];
-      mergeBuiltins(fallback);
+      mergeBuiltins([]);
     }
     if(status) status.textContent = 'Could not fetch tariffs.json; using cached/local tariffs.';
   }
@@ -423,13 +414,7 @@ async function loadTariffsFromSource(){
 
 function seedBuiltins(){
   if(!localStorage.getItem('savedTariffs')){
-    const list = [
-      {name:'Flat 24/7', config: presets.flat},
-      {name:'Economy 7', config: presets['economy7']},
-      {name:'Octopus Go', config: presets['octopus-go']},
-      {name:'Peak/Off-peak', config: presets['peak-avoid']},
-    ];
-    setSavedList(list);
+    setSavedList([]);
   }
 }
 
@@ -626,18 +611,7 @@ function saveOverwrite(){
 }
 
 function restoreBuiltins(){
-  const list = getSavedList();
-  const builtins = [
-    {name:'Flat 24/7', config: presets.flat},
-    {name:'Economy 7', config: presets['economy7']},
-    {name:'Octopus Go', config: presets['octopus-go']},
-    {name:'Peak/Off-peak', config: presets['peak-avoid']},
-  ];
-  for(const b of builtins){
-    if(!list.some(x=>x.name===b.name)) list.push(b);
-  }
-  setSavedList(list);
-  renderTariffList();
+  loadTariffsFromSource();
 }
 
 seedBuiltins();
